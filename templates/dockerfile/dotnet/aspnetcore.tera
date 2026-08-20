@@ -1,0 +1,24 @@
+# === Stage 1: Build the application ===
+FROM mcr.microsoft.com/dotnet/sdk:{{ runtime_version | default(value="8.0") }}-alpine AS builder
+WORKDIR /src
+
+COPY *.csproj *.fsproj ./
+RUN dotnet restore
+
+COPY . .
+RUN dotnet publish -c Release -o /app/publish --no-restore
+
+# === Stage 2: Production runner ===
+FROM mcr.microsoft.com/dotnet/aspnet:{{ runtime_version | default(value="8.0") }}-alpine AS runner
+RUN addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app/publish .
+
+USER appuser
+EXPOSE {{ port | default(value=8080) }}
+ENV ASPNETCORE_URLS=http://+:{{ port | default(value=8080) }} \
+    DOTNET_RUNNING_IN_CONTAINER=true
+
+CMD ["dotnet", "app.dll"]

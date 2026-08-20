@@ -1,0 +1,48 @@
+# === Stage 1: Install dependencies ===
+FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS deps
+WORKDIR /app
+
+RUN apk add --no-cache \
+    git unzip libzip-dev libpng-dev oniguruma-dev \
+    && docker-php-ext-install pdo_mysql zip bcmath opcache
+
+COPY composer.json composer.lock ./
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
+    composer install --no-dev --no-scripts --no-autoloader --prefer-dist || true
+
+# === Stage 2: Build the application ===
+FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS builder
+WORKDIR /app
+
+RUN apk add --no-cache \
+    git unzip libzip-dev libpng-dev oniguruma-dev nodejs npm \
+    && docker-php-ext-install pdo_mysql zip bcmath opcache
+
+COPY composer.json composer.lock ./
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
+    composer install --no-dev --prefer-dist --no-scripts
+
+COPY . .
+RUN composer dump-autoload --optimize --no-dev && \
+    php artisan config:cache && \
+    php artisan route:cache && \
+    php artisan view:cache 2>/dev/null || true
+
+# === Stage 3: Production runner ===
+FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS runner
+RUN apk add --no-cache \
+    libzip libpng oniguruma \
+    && addgroup -g 1001 appgroup \
+    && adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app /app
+
+USER appuser
+EXPOSE {{ port | default(value=8000) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port={{ port | default(value=8000) }}"]
+{% endif -%}

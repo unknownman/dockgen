@@ -1,0 +1,46 @@
+# === Stage 1: Build dependencies ===
+FROM ruby:{{ runtime_version | default(value="3.2") }}-slim AS deps
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY Gemfile Gemfile.lock ./
+RUN bundle config set --local deployment 'true' && \
+    bundle config set --local without 'development test' && \
+    bundle install --jobs 4 --retry 3
+
+# === Stage 2: Build assets ===
+FROM ruby:{{ runtime_version | default(value="3.2") }}-slim AS builder
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=deps /app/vendor/bundle ./vendor/bundle
+COPY . .
+
+RUN bundle exec bootsnap precompile app/ lib/ 2>/dev/null || true
+RUN SECRET_KEY_BASE=placeholder bundle exec rails assets:precompile 2>/dev/null || true
+
+# === Stage 3: Production runner ===
+FROM ruby:{{ runtime_version | default(value="3.2") }}-slim AS runner
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app /app
+
+USER appuser
+EXPOSE {{ port | default(value=3000) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0", "-p", "{{ port | default(value=3000) }}"]
+{% endif -%}

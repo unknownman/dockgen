@@ -1,0 +1,44 @@
+# === Stage 1: Build dependencies (cached layer) ===
+FROM rust:{{ runtime_version | default(value="1.78") }}-slim AS deps
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && \
+    echo 'fn main() {}' > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
+
+# === Stage 2: Build the application ===
+FROM rust:{{ runtime_version | default(value="1.78") }}-slim AS builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=deps /app/target /app/target
+COPY . .
+RUN touch src/main.rs && cargo build --release
+
+# === Stage 3: Minimal runtime ===
+FROM debian:bookworm-slim AS runner
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app/target/release/server /app/server 2>/dev/null || \
+    COPY --from=builder --chown=appuser:appgroup /app/target/release/* /app/
+
+USER appuser
+EXPOSE {{ port | default(value=8080) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["./server"]
+{% endif -%}

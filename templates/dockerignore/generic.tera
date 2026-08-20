@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+*.log
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+*.md
+README.md

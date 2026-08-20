@@ -1,0 +1,17 @@
+target
+.git
+.gitignore
+*.rs.bk
+Cargo.lock
+*.log
+.env
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+*.md
+README.md

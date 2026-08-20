@@ -1,0 +1,31 @@
+# === Stage 1: Install dependencies ===
+FROM php:{{ runtime_version | default(value="8.2") }}-cli-alpine AS deps
+WORKDIR /app
+
+RUN apk add --no-cache \
+    git unzip libzip-dev libpng-dev oniguruma-dev \
+    && docker-php-ext-install pdo_mysql zip bcmath opcache
+
+COPY composer.json composer.lock ./
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
+    composer install --no-dev --prefer-dist || true
+
+# === Stage 2: Production runner ===
+FROM php:{{ runtime_version | default(value="8.2") }}-cli-alpine AS runner
+RUN apk add --no-cache \
+    libzip libpng oniguruma \
+    && addgroup -g 1001 appgroup \
+    && adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --from=deps /app/vendor ./vendor
+COPY --chown=appuser:appgroup . .
+
+USER appuser
+EXPOSE {{ port | default(value=8000) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["php", "-S", "0.0.0.0:{{ port | default(value=8000) }}"]
+{% endif -%}

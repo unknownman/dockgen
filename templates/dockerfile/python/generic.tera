@@ -1,0 +1,47 @@
+# === Stage 1: Build dependencies ===
+FROM python:{{ runtime_version | default(value="3.11") }}-slim AS builder
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt* pyproject.toml* poetry.lock* Pipfile* Pipfile.lock* ./
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    if [ -f poetry.lock ]; then \
+        pip install --no-cache-dir poetry && \
+        poetry config virtualenvs.create false && \
+        poetry install --no-dev --no-interaction --no-ansi; \
+    elif [ -f Pipfile.lock ]; then \
+        pip install --no-cache-dir pipenv && \
+        pipenv requirements > requirements.txt && \
+        pip install --no-cache-dir -r requirements.txt; \
+    elif [ -f requirements.txt ]; then \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
+
+# === Stage 2: Production runner ===
+FROM python:{{ runtime_version | default(value="3.11") }}-slim AS runner
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY . .
+
+USER appuser
+EXPOSE {{ port | default(value=8000) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{{ port | default(value=8000) }}"]
+{% endif -%}

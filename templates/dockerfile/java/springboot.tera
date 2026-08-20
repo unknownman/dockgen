@@ -1,0 +1,34 @@
+# === Stage 1: Build with Maven ===
+FROM eclipse-temurin:{{ runtime_version | default(value="21") }}-jdk-alpine AS builder
+WORKDIR /app
+
+COPY pom.xml mvnw ./
+COPY .mvn .mvn
+RUN ./mvnw dependency:go-offline -B 2>/dev/null || true
+
+COPY src ./src
+
+{% if build_tool | default(value="maven") == "gradle" -%}
+COPY gradlew build.gradle* settings.gradle* ./
+COPY gradle gradle
+RUN ./gradlew bootJar --no-daemon 2>/dev/null || \
+    ./mvnw package -DskipTests -B
+{% else -%}
+RUN ./mvnw package -DskipTests -B 2>/dev/null || \
+    (gradle wrapper && ./gradlew bootJar --no-daemon)
+{% endif -%}
+
+# === Stage 2: Production runner ===
+FROM eclipse-temurin:{{ runtime_version | default(value="21") }}-jre-alpine AS runner
+RUN addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app/target/*.jar /app/app.jar 2>/dev/null || \
+    COPY --from=builder --chown=appuser:appgroup /app/build/libs/*.jar /app/app.jar
+
+USER appuser
+EXPOSE {{ port | default(value=8080) }}
+ENV JAVA_OPTS="-Xms256m -Xmx512m"
+
+CMD ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

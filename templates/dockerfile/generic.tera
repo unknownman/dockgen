@@ -1,0 +1,16 @@
+FROM alpine:3.19 AS runner
+RUN apk add --no-cache ca-certificates && \
+    addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --chown=appuser:appgroup . .
+
+USER appuser
+EXPOSE {{ port | default(value=8080) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["echo", "No start command configured"]
+{% endif -%}
