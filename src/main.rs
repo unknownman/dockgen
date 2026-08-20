@@ -1,3 +1,4 @@
+mod analyzer;
 mod cli;
 mod detector;
 mod models;
