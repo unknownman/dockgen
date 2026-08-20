@@ -7,21 +7,21 @@ use crate::models::{Language, PackageManager, EXCLUDED_DIRS};
 /// Detects the primary [`Language`] and [`PackageManager`] for a directory by
 /// inspecting manifest and lock files.
 ///
-/// Detection follows a strict priority matrix: manifest files are checked first
-/// (they are unambiguous), then lock files disambiguate the package manager.
-/// If no manifests are found, a file-extension heuristic is applied.
+/// Detection follows a strict **Backend-First / Co-existence Disambiguation
+/// Matrix**:
+///
+/// 1. Backend manifests always win over `package.json` (PHP, Ruby, Rust, Go,
+///    Java, .NET).
+/// 2. When both Python manifests and `package.json` co-exist, the presence of
+///    fullstack Node.js frameworks in `package.json` (next, nuxt, remix, etc.)
+///    tips the balance toward Node.js. Otherwise Python is primary.
+/// 3. `package.json` alone means Node.js.
+/// 4. File-extension heuristic as final fallback.
 pub fn detect_language_and_pm(dir_path: &Path) -> (Language, PackageManager) {
-    // --- Manifest-based detection (ordered by specificity) ---
+    // --- Backend manifests (unconditionally override Node.js) ---
 
-    if dir_path.join("package.json").is_file() {
-        return (Language::NodeJs, detect_node_pm(dir_path));
-    }
-    if dir_path.join("pyproject.toml").is_file()
-        || dir_path.join("requirements.txt").is_file()
-        || dir_path.join("Pipfile").is_file()
-        || dir_path.join("setup.py").is_file()
-    {
-        return (Language::Python, detect_python_pm(dir_path));
+    if dir_path.join("composer.json").is_file() {
+        return (Language::Php, PackageManager::Composer);
     }
     if dir_path.join("Cargo.toml").is_file() {
         return (Language::Rust, PackageManager::Cargo);
@@ -38,9 +38,6 @@ pub fn detect_language_and_pm(dir_path: &Path) -> (Language, PackageManager) {
     {
         return (Language::Java, PackageManager::Gradle);
     }
-    if dir_path.join("composer.json").is_file() {
-        return (Language::Php, PackageManager::Composer);
-    }
     if has_dotnet_manifest(dir_path) {
         return (Language::DotNet, PackageManager::Nuget);
     }
@@ -48,9 +45,70 @@ pub fn detect_language_and_pm(dir_path: &Path) -> (Language, PackageManager) {
         return (Language::Ruby, PackageManager::Bundler);
     }
 
+    // --- Python vs Node.js co-existence disambiguation ---
+    //
+    // When both Python manifests and `package.json` exist, we check if
+    // `package.json` declares fullstack Node.js frameworks. If so, Node.js is
+    // the primary language (e.g. a standalone Next.js app with a Python
+    // utility script). Otherwise Python is the backend language and
+    // `package.json` is just frontend build tooling.
+
+    let has_python = dir_path.join("pyproject.toml").is_file()
+        || dir_path.join("requirements.txt").is_file()
+        || dir_path.join("Pipfile").is_file()
+        || dir_path.join("setup.py").is_file();
+
+    if has_python {
+        if dir_path.join("package.json").is_file() && has_fullstack_node_deps(dir_path) {
+            return (Language::NodeJs, detect_node_pm(dir_path));
+        }
+        return (Language::Python, detect_python_pm(dir_path));
+    }
+
+    // --- Node.js (only if no backend manifest was found above) ---
+
+    if dir_path.join("package.json").is_file() {
+        return (Language::NodeJs, detect_node_pm(dir_path));
+    }
+
     // --- Fallback: file extension heuristic ---
 
     detect_by_file_extensions(dir_path)
+}
+
+// ---------------------------------------------------------------------------
+// Fullstack Node.js dependency detection
+// ---------------------------------------------------------------------------
+
+/// Checks if `package.json` in `dir` declares any fullstack Node.js framework.
+///
+/// Fullstack frameworks are frameworks that own the HTTP server, routing, and
+/// rendering pipeline — they are the primary application, not a build tool.
+const FULLSTACK_NODE_FRAMEWORKS: &[&str] = &[
+    "\"next\"",
+    "\"nuxt\"",
+    "\"@nuxt/",
+    "\"remix\"",
+    "\"@remix-run/",
+    "\"astro\"",
+    "\"sveltekit\"",
+    "\"@sveltejs/kit\"",
+    "\"express\"",
+    "\"fastify\"",
+    "\"@nestjs/core\"",
+    "\"hono\"",
+    "\"@hono/",
+];
+
+fn has_fullstack_node_deps(dir: &Path) -> bool {
+    let pkg_path = dir.join("package.json");
+    let Ok(content) = fs::read_to_string(&pkg_path) else {
+        return false;
+    };
+    // Fast substring scan — avoids pulling in serde_json for a heuristic.
+    FULLSTACK_NODE_FRAMEWORKS
+        .iter()
+        .any(|dep| content.contains(dep))
 }
 
 // ---------------------------------------------------------------------------
@@ -505,5 +563,170 @@ mod tests {
         let (lang, pm) = detect_language_and_pm(tmp.path());
         assert_eq!(lang, Language::Go);
         assert_eq!(pm, PackageManager::GoModules);
+    }
+
+    // -- polyglot: backend wins over package.json ----------------------------
+
+    #[test]
+    fn polyglot_laravel_with_inertia() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("composer.json"), r#"{"name": "x"}"#).unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Php);
+        assert_eq!(pm, PackageManager::Composer);
+    }
+
+    #[test]
+    fn polyglot_rails_with_react() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("Gemfile"),
+            "source 'https://rubygems.org'\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Ruby);
+        assert_eq!(pm, PackageManager::Bundler);
+    }
+
+    #[test]
+    fn polyglot_django_with_vue() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "django\n").unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Python);
+        assert_eq!(pm, PackageManager::Pip);
+    }
+
+    #[test]
+    fn polyglot_springboot_with_angular() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("pom.xml"), "<project></project>").unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Java);
+        assert_eq!(pm, PackageManager::Maven);
+    }
+
+    #[test]
+    fn polyglot_dotnet_with_react() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("MyApp.csproj"), "").unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::DotNet);
+        assert_eq!(pm, PackageManager::Nuget);
+    }
+
+    #[test]
+    fn polyglot_rust_with_leptos() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Rust);
+        assert_eq!(pm, PackageManager::Cargo);
+    }
+
+    #[test]
+    fn pure_nodejs_still_detected() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        fs::write(tmp.path().join("package-lock.json"), "{}").unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::NodeJs);
+        assert_eq!(pm, PackageManager::Npm);
+    }
+
+    // -- Python vs Node.js co-existence disambiguation -----------------------
+
+    #[test]
+    fn python_with_vite_build_tool_is_python() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "django\n").unwrap();
+        // package.json with only build tooling (vite, tailwind, etc.)
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"devDependencies": {"vite": "^5.0", "tailwindcss": "^3.0"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Python);
+        assert_eq!(pm, PackageManager::Pip);
+    }
+
+    #[test]
+    fn python_with_nextjs_dep_is_nodejs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "django\n").unwrap();
+        // package.json declaring Next.js as a dependency
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"dependencies": {"next": "14.0.0", "react": "^18"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::NodeJs);
+        assert_eq!(pm, PackageManager::Npm);
+    }
+
+    #[test]
+    fn python_with_express_dep_is_nodejs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "").unwrap();
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"dependencies": {"express": "^4.18"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::NodeJs);
+        assert_eq!(pm, PackageManager::Npm);
+    }
+
+    #[test]
+    fn python_with_nestjs_dep_is_nodejs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "flask\n").unwrap();
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"dependencies": {"@nestjs/core": "^10.0"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::NodeJs);
+        assert_eq!(pm, PackageManager::Npm);
+    }
+
+    #[test]
+    fn django_with_vite_and_react_is_python() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "django\n").unwrap();
+        // React + Vite — build tooling, not a fullstack framework
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"dependencies": {"react": "^18"}, "devDependencies": {"vite": "^5.0"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::Python);
+        assert_eq!(pm, PackageManager::Pip);
+    }
+
+    #[test]
+    fn python_with_sveltekit_dep_is_nodejs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("pyproject.toml"), "[tool.poetry]\n").unwrap();
+        fs::write(
+            tmp.path().join("package.json"),
+            r#"{"devDependencies": {"@sveltejs/kit": "^2.0"}}"#,
+        )
+        .unwrap();
+        let (lang, pm) = detect_language_and_pm(tmp.path());
+        assert_eq!(lang, Language::NodeJs);
+        assert_eq!(pm, PackageManager::Npm);
     }
 }

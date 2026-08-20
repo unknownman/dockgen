@@ -1,26 +1,28 @@
-# === Stage 1: Install dependencies ===
-FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS deps
+{% set img_version = runtime_version | default(value="8.3") %}
+{% if base_image_variant == "slim" %}
+{% set php_base = "php:" ~ img_version ~ "-fpm" %}
+{% set runner_base = "php:" ~ img_version ~ "-cli" %}
+{% else %}
+{% set php_base = "php:" ~ img_version ~ "-fpm-alpine" %}
+{% set runner_base = "php:" ~ img_version ~ "-cli-alpine" %}
+{% endif %}
+# === Stage 1: Install Composer dependencies ===
+FROM composer:2 AS composer-deps
+WORKDIR /app
+COPY composer.json composer.lock* ./
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-interaction 2>/dev/null || true
+
+# === Stage 2: Build the application ===
+FROM {{ php_base }} AS builder
 WORKDIR /app
 
 RUN apk add --no-cache \
     git unzip libzip-dev libpng-dev oniguruma-dev \
     && docker-php-ext-install pdo_mysql zip bcmath opcache
 
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
-
-COPY composer.json composer.lock ./
-RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist || true
-
-# === Stage 2: Build the application ===
-FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS builder
-WORKDIR /app
-
-RUN apk add --no-cache \
-    git unzip libzip-dev libpng-dev oniguruma-dev nodejs npm \
-    && docker-php-ext-install pdo_mysql zip bcmath opcache
-
-COPY composer.json composer.lock ./
-RUN composer install --no-dev --prefer-dist --no-scripts
+COPY --from=composer-deps /app/vendor /app/vendor
+COPY composer.json composer.lock* ./
+RUN composer install --no-dev --prefer-dist --no-scripts --no-interaction 2>/dev/null || true
 
 COPY . .
 RUN composer dump-autoload --optimize --no-dev && \
@@ -28,15 +30,48 @@ RUN composer dump-autoload --optimize --no-dev && \
     php artisan route:cache && \
     php artisan view:cache 2>/dev/null || true
 
+{% if has_frontend_assets %}
+# === Stage 2b: Build frontend assets (Vite / Inertia / esbuild) ===
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+RUN \
+  if [ -f pnpm-lock.yaml ]; then \
+    corepack enable && pnpm install --frozen-lockfile; \
+  elif [ -f yarn.lock ]; then \
+    yarn install --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then \
+    npm ci; \
+  else \
+    npm install; \
+  fi
+
+COPY vite.config.* tailwind.config.* postcss.config.* tsconfig.* ./
+COPY resources/ resources/
+COPY public/ public/
+RUN npm run build
+{% endif %}
+
 # === Stage 3: Production runner ===
-FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS runner
+FROM {{ runner_base }} AS runner
+{% if base_image_variant == "alpine" or base_image_variant is not defined or base_image_variant == "default" %}
 RUN apk add --no-cache \
     libzip libpng oniguruma \
     && addgroup -g 1001 appgroup \
     && adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+{% else %}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libzip libpng oniguruma && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+{% endif %}
 
 WORKDIR /app
 COPY --from=builder --chown=appuser:appgroup /app /app
+{% if has_frontend_assets %}
+COPY --from=frontend-builder --chown=appuser:appgroup /app/public/build /app/public/build
+{% endif %}
 
 USER appuser
 EXPOSE {{ port | default(value=8000) }}

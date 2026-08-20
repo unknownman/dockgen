@@ -1,5 +1,33 @@
+{% set img_version = runtime_version | default(value="1.22") %}
+{% if base_image_variant == "distroless" %}
 # === Stage 1: Build the binary ===
-FROM golang:{{ runtime_version | default(value="1.22") }}-alpine AS builder
+FROM golang:{{ img_version }}-alpine AS builder
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates
+
+COPY go.mod go.sum* ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server ./cmd/server 2>/dev/null || \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server .
+
+# === Stage 2: Minimal distroless runtime ===
+FROM gcr.io/distroless/static-debian12 AS runner
+COPY --from=builder /app/server /app/server
+
+USER nonroot:nonroot
+EXPOSE {{ port | default(value=8080) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["/app/server"]
+{% endif -%}
+{% else %}
+# === Stage 1: Build the binary ===
+FROM golang:{{ img_version }}-alpine AS builder
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates
@@ -12,7 +40,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server ./cmd/serv
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server .
 
 # === Stage 2: Minimal runtime ===
-FROM alpine:3.19 AS runner
+FROM alpine:3.20 AS runner
 RUN apk add --no-cache ca-certificates && \
     addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
@@ -24,3 +52,4 @@ USER appuser
 EXPOSE {{ port | default(value=8080) }}
 
 CMD ["./server"]
+{% endif %}

@@ -1,5 +1,11 @@
+{% set img_version = runtime_version | default(value="20") %}
+{% if base_image_variant == "slim" %}
+{% set node_base = "node:" ~ img_version ~ "-slim" %}
+{% else %}
+{% set node_base = "node:" ~ img_version ~ "-alpine" %}
+{% endif %}
 # === Stage 1: Install dependencies ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS deps
+FROM {{ node_base }} AS deps
 WORKDIR /app
 COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
 RUN \
@@ -14,7 +20,7 @@ RUN \
   fi
 
 # === Stage 2: Build the application ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS builder
+FROM {{ node_base }} AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -22,7 +28,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # === Stage 3: Production runner ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS runner
+FROM {{ node_base }} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

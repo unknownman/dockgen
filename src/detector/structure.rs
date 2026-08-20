@@ -252,9 +252,21 @@ fn discover_monorepo_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> 
 
 /// Discovers service candidates in a flat (non-monorepo) project.
 ///
-/// - If the root itself contains manifests, returns a single `Single` candidate.
-/// - Otherwise, scans depth-1 subdirectories for manifests.
+/// - If depth-1 subdirectories contain well-known service names
+///   (`frontend`, `backend`, `api`, etc.) **and** their own manifests, they are
+///   returned as distinct candidates (e.g. a monorepo-like layout without a
+///   workspace tool).
+/// - Otherwise, if the root itself contains manifests, returns a single `Single`
+///   candidate.
+/// - Otherwise, scans depth-1 subdirectories for any manifests.
 fn discover_flat_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> {
+    // Check for well-known service sub-directories first — even when the root
+    // has manifests (polyglot monorepo layout without workspace tool).
+    let sub_services = discover_well_known_sub_services(root);
+    if !sub_services.is_empty() {
+        return sub_services;
+    }
+
     let root_manifests = find_manifests(root);
     if !root_manifests.is_empty() {
         return vec![DiscoveredServiceCandidate {
@@ -285,6 +297,48 @@ fn discover_flat_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> {
                     name: dir_name,
                     relative_path: relative,
                     full_path: path.clone(),
+                    service_type: st,
+                    manifest_files: manifests,
+                });
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Scans depth-1 subdirectories for well-known service names that contain
+/// their own manifests.
+fn discover_well_known_sub_services(root: &Path) -> Vec<DiscoveredServiceCandidate> {
+    let mut candidates = Vec::new();
+    let all_well_known: Vec<&str> = FRONTEND_DIRS
+        .iter()
+        .chain(BACKEND_DIRS.iter())
+        .copied()
+        .collect();
+
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = file_name(&path);
+            if is_excluded(&dir_name) {
+                continue;
+            }
+            let lower = dir_name.to_ascii_lowercase();
+            if !all_well_known.contains(&lower.as_str()) {
+                continue;
+            }
+            let manifests = find_manifests(&path);
+            if !manifests.is_empty() {
+                let st = classify_service_type(&dir_name);
+                let relative = relative_path(root, &path);
+                candidates.push(DiscoveredServiceCandidate {
+                    name: dir_name,
+                    relative_path: relative,
+                    full_path: path,
                     service_type: st,
                     manifest_files: manifests,
                 });
@@ -746,6 +800,68 @@ mod tests {
             .find(|c| c.name == "backend")
             .unwrap();
         assert_eq!(be_c.service_type, ServiceType::Backend);
+    }
+
+    #[test]
+    fn root_manifest_with_well_known_sub_services() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Root has a manifest (e.g. Laravel + frontend build).
+        create_file(root, "composer.json");
+        create_file(root, "package.json");
+
+        // Well-known sub-services with their own manifests.
+        let fe = create_dir(root, "frontend");
+        create_file(&fe, "package.json");
+
+        let be = create_dir(root, "backend");
+        create_file(&be, "composer.json");
+
+        let result = analyze_structure(root).unwrap();
+
+        assert!(!result.is_monorepo);
+        // Should discover sub-services, not root as Single.
+        assert_eq!(result.candidates.len(), 2);
+
+        let names: Vec<&str> = result.candidates.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"frontend"));
+        assert!(names.contains(&"backend"));
+
+        let fe_c = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "frontend")
+            .unwrap();
+        assert_eq!(fe_c.service_type, ServiceType::Frontend);
+
+        let be_c = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "backend")
+            .unwrap();
+        assert_eq!(be_c.service_type, ServiceType::Backend);
+    }
+
+    #[test]
+    fn root_manifest_no_well_known_sub_services() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Root has manifest, sub-dirs are NOT well-known service names.
+        create_file(root, "composer.json");
+
+        let app = create_dir(root, "app");
+        create_file(&app, "User.php");
+
+        let config = create_dir(root, "config");
+        create_file(&config, "app.php");
+
+        let result = analyze_structure(root).unwrap();
+
+        assert!(!result.is_monorepo);
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].service_type, ServiceType::Single);
     }
 
     // -- deterministic sorting ----------------------------------------------

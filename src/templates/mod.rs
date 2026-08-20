@@ -110,7 +110,7 @@ mod tests {
         let content = get_template_content("dockerfile/node/nextjs.tera");
         assert!(content.is_some());
         let text = content.unwrap();
-        assert!(text.contains("FROM node:"));
+        assert!(text.contains("FROM {{ node_base }}"));
         assert!(text.contains("USER nextjs"));
     }
 
@@ -325,6 +325,8 @@ mod tests {
         let mut ctx = tera::Context::new();
         ctx.insert("port", &3000);
         ctx.insert("runtime_version", &"20");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &false);
         let output = tera_render("dockerfile/node/nextjs.tera", &ctx);
         assert!(output.contains("FROM node:20-alpine AS deps"));
         assert!(output.contains("USER nextjs"));
@@ -333,15 +335,41 @@ mod tests {
     }
 
     #[test]
+    fn render_nextjs_dockerfile_slim() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &3000);
+        ctx.insert("runtime_version", &"20");
+        ctx.insert("base_image_variant", &"slim");
+        ctx.insert("has_frontend_assets", &false);
+        let output = tera_render("dockerfile/node/nextjs.tera", &ctx);
+        assert!(output.contains("FROM node:20-slim AS deps"));
+        assert!(output.contains("USER nextjs"));
+    }
+
+    #[test]
     fn render_fastapi_dockerfile() {
         let mut ctx = tera::Context::new();
         ctx.insert("port", &8000);
         ctx.insert("runtime_version", &"3.12");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &false);
         let output = tera_render("dockerfile/python/fastapi.tera", &ctx);
-        assert!(output.contains("FROM python:3.12-slim AS builder"));
+        assert!(output.contains("FROM python:3.12-alpine AS builder"));
         assert!(output.contains("USER appuser"));
         assert!(output.contains("EXPOSE 8000"));
         assert!(output.contains("uvicorn"));
+    }
+
+    #[test]
+    fn render_fastapi_dockerfile_slim() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8000);
+        ctx.insert("runtime_version", &"3.12");
+        ctx.insert("base_image_variant", &"slim");
+        ctx.insert("has_frontend_assets", &false);
+        let output = tera_render("dockerfile/python/fastapi.tera", &ctx);
+        assert!(output.contains("FROM python:3.12-slim AS builder"));
+        assert!(output.contains("USER appuser"));
     }
 
     #[test]
@@ -349,6 +377,8 @@ mod tests {
         let mut ctx = tera::Context::new();
         ctx.insert("port", &9090);
         ctx.insert("runtime_version", &"1.22");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &false);
         let output = tera_render("dockerfile/go/generic.tera", &ctx);
         assert!(output.contains("FROM golang:1.22-alpine AS builder"));
         assert!(output.contains("CGO_ENABLED=0"));
@@ -357,15 +387,72 @@ mod tests {
     }
 
     #[test]
+    fn render_go_dockerfile_distroless() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &9090);
+        ctx.insert("runtime_version", &"1.22");
+        ctx.insert("base_image_variant", &"distroless");
+        ctx.insert("has_frontend_assets", &false);
+        let output = tera_render("dockerfile/go/generic.tera", &ctx);
+        assert!(output.contains("distroless"));
+        assert!(output.contains("USER nonroot:nonroot"));
+        assert!(output.contains("CGO_ENABLED=0"));
+    }
+
+    #[test]
     fn render_rust_dockerfile() {
         let mut ctx = tera::Context::new();
         ctx.insert("port", &8080);
         ctx.insert("runtime_version", &"1.78");
+        ctx.insert("base_image_variant", &"slim");
+        ctx.insert("has_frontend_assets", &false);
         let output = tera_render("dockerfile/rust/generic.tera", &ctx);
-        assert!(output.contains("FROM rust:1.78-slim AS deps"));
+        assert!(output.contains("cargo-chef"));
+        assert!(output.contains("cargo chef prepare"));
+        assert!(output.contains("cargo chef cook"));
         assert!(output.contains("cargo build --release"));
         assert!(output.contains("USER appuser"));
         assert!(output.contains("EXPOSE 8080"));
+    }
+
+    #[test]
+    fn render_rust_dockerfile_alpine() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8080);
+        ctx.insert("runtime_version", &"1.78");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &false);
+        let output = tera_render("dockerfile/rust/generic.tera", &ctx);
+        assert!(output.contains("rust:1.78-alpine"));
+        assert!(output.contains("cargo-chef"));
+        assert!(output.contains("USER appuser"));
+    }
+
+    #[test]
+    fn render_laravel_with_frontend_assets() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8000);
+        ctx.insert("runtime_version", &"8.3");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &true);
+        let output = tera_render("dockerfile/php/laravel.tera", &ctx);
+        assert!(output.contains("frontend-builder"));
+        assert!(output.contains("npm run build"));
+        assert!(output.contains("public/build"));
+        assert!(output.contains("USER appuser"));
+        assert!(output.contains("EXPOSE 8000"));
+    }
+
+    #[test]
+    fn render_laravel_without_frontend_assets() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8000);
+        ctx.insert("runtime_version", &"8.3");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("has_frontend_assets", &false);
+        let output = tera_render("dockerfile/php/laravel.tera", &ctx);
+        assert!(!output.contains("frontend-builder"));
+        assert!(output.contains("USER appuser"));
     }
 
     #[test]

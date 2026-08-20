@@ -1,36 +1,45 @@
-# === Stage 1: Build dependencies (cached layer) ===
-FROM rust:{{ runtime_version | default(value="1.78") }}-slim AS deps
+{% set img_version = runtime_version | default(value="1.78") %}
+{% if base_image_variant == "alpine" %}
+{% set rust_base = "rust:" ~ img_version ~ "-alpine" %}
+{% set runner_base = "alpine:3.20" %}
+{% set pkg_install = "RUN apk add --no-cache ca-certificates" %}
+{% else %}
+{% set rust_base = "rust:" ~ img_version ~ "-slim" %}
+{% set runner_base = "debian:bookworm-slim" %}
+{% set pkg_install = "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*" %}
+{% endif %}
+# === Stage 1: Cargo chef prepare (dependency caching) ===
+FROM {{ rust_base }} AS chef
+RUN cargo install cargo-chef
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
 
-COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && \
-    echo 'fn main() {}' > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
-
-# === Stage 2: Build the application ===
-FROM rust:{{ runtime_version | default(value="1.78") }}-slim AS builder
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY --from=deps /app/target /app/target
+FROM chef AS planner
 COPY . .
-RUN touch src/main.rs && cargo build --release && \
+RUN cargo chef prepare --recipe-path recipe.json
+
+# === Stage 2: Build dependencies (cached) ===
+FROM chef AS builder
+{% if base_image_variant != "alpine" %}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev && \
+    rm -rf /var/lib/apt/lists/*
+{% else %}
+RUN apk add --no-cache pkg-config openssl-dev
+{% endif %}
+
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+COPY . .
+RUN cargo build --release && \
     mkdir -p /app/bin && \
     find target/release -maxdepth 1 -type f -executable -exec cp {} /app/bin/app \;
 
 # === Stage 3: Minimal runtime ===
-FROM debian:bookworm-slim AS runner
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libssl3 && \
-    rm -rf /var/lib/apt/lists/* && \
-    groupadd --gid 1001 appgroup && \
-    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+FROM {{ runner_base }} AS runner
+{{ pkg_install }}
+RUN addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
 
 WORKDIR /app
 COPY --from=builder --chown=appuser:appgroup /app/bin/app /app/server

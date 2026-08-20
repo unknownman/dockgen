@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use tera::Tera;
 
-use crate::models::{GeneratedFile, GenerationConfig, ProjectAnalysis, Service};
+use crate::models::{GeneratedFile, GenerationConfig, PackageManager, ProjectAnalysis, Service};
 use crate::templates::resolve_dockerfile_template;
 
 // ---------------------------------------------------------------------------
@@ -94,10 +94,12 @@ fn build_dockerfile_context(
         .unwrap_or(&default_version);
     ctx.insert("runtime_version", version);
 
-    // Base image variant.
-    if let Some(variant) = config.base_image_override {
-        ctx.insert("base_image_variant", &variant.to_string());
-    }
+    // Base image variant — default to "alpine" for smallest images.
+    let base_variant = config
+        .base_image_override
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "alpine".to_string());
+    ctx.insert("base_image_variant", &base_variant);
 
     // Build & start commands.
     if let Some(ref cmd) = service.build_command {
@@ -111,6 +113,23 @@ fn build_dockerfile_context(
     ctx.insert("package_manager", &service.package_manager.to_string());
     ctx.insert("language", &service.language.to_string());
     ctx.insert("framework", &service.framework.to_string());
+
+    // Hybrid asset build: detect if a Node.js frontend build step is needed.
+    // When a backend service (PHP, Python, Ruby, etc.) also has a
+    // `package.json`, the templates can optionally run a Node build stage
+    // for Vite/Inertia/esbuild assets.
+    let has_frontend_assets =
+        service.path.join("package.json").is_file() && !is_node_language(&service.language);
+    ctx.insert("has_frontend_assets", &has_frontend_assets);
+
+    // Node.js package manager string for hybrid build stages.
+    let node_pm = match &service.package_manager {
+        PackageManager::Pnpm => "pnpm",
+        PackageManager::Yarn => "yarn",
+        PackageManager::Bun => "bun",
+        _ => "npm",
+    };
+    ctx.insert("node_pm", &node_pm.to_string());
 
     // Environment variables — sorted by key for deterministic output.
     let mut sorted_env: Vec<&(String, String)> = service.env_vars.iter().collect();
@@ -131,6 +150,11 @@ fn build_dockerfile_context(
     ctx.insert("assembly_name", &service.name);
 
     ctx
+}
+
+/// Returns `true` if the language is a Node.js variant.
+fn is_node_language(lang: &crate::models::Language) -> bool {
+    matches!(lang, crate::models::Language::NodeJs)
 }
 
 /// Sensible default runtime version strings per language family.
