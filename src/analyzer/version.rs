@@ -55,8 +55,7 @@ fn extract_node_version(dir: &Path) -> Option<String> {
 fn clean_node_version(raw: &str) -> String {
     let v = raw.trim().trim_start_matches('v');
     // Strip leading operators: >=, <=, ==, !=, ~, ^, >, <
-    let v = v
-        .trim_start_matches(['>', '<', '=', '!', '~', '^']);
+    let v = v.trim_start_matches(['>', '<', '=', '!', '~', '^']);
     // Take major version only — strip `x`, `.x`, `.*`, etc.
     let major = v.split('.').next().unwrap_or(v);
     // Strip any non-numeric suffixes.
@@ -75,11 +74,7 @@ fn extract_python_version(dir: &Path) -> Option<String> {
     }
     // runtime.txt (Heroku-style: "python-3.11.4")
     if let Some(v) = read_trimmed_file(&dir.join("runtime.txt")) {
-        let cleaned = v
-            .strip_prefix("python-")
-            .unwrap_or(&v)
-            .trim()
-            .to_string();
+        let cleaned = v.strip_prefix("python-").unwrap_or(&v).trim().to_string();
         return Some(clean_python_version(&cleaned));
     }
     // pyproject.toml -> project.requires-python or tool.poetry.dependencies.python
@@ -113,8 +108,7 @@ fn extract_python_version(dir: &Path) -> Option<String> {
 fn extract_python_version_from_spec(spec: &str) -> String {
     let s = spec.trim();
     // Strip operators: >=, <=, ==, !=, ~=, ^, >
-    let stripped = s
-        .trim_start_matches(['>', '<', '=', '!', '~', '^']);
+    let stripped = s.trim_start_matches(['>', '<', '=', '!', '~', '^']);
     clean_python_version(stripped)
 }
 
@@ -263,8 +257,7 @@ fn extract_php_version(dir: &Path) -> Option<String> {
         .and_then(|r| r.get("php"))
         .and_then(|v| v.as_str())?;
     // Specifier like ">=8.1", "~8.1.0", "^8.1"
-    let stripped = version_str
-        .trim_start_matches(['>', '<', '=', '~', '^']);
+    let stripped = version_str.trim_start_matches(['>', '<', '=', '~', '^']);
     let parts: Vec<&str> = stripped.split('.').collect();
     match parts.len() {
         0 => Some(stripped.to_string()),
@@ -290,10 +283,7 @@ fn extract_dotnet_version(dir: &Path) -> Option<String> {
                     // "net8.0" -> "8.0"
                     let version = fw.strip_prefix("net").unwrap_or(&fw);
                     // Handle net8.0, netstandard2.1, etc.
-                    let version = version
-                        .split('-')
-                        .next()
-                        .unwrap_or(version);
+                    let version = version.split('-').next().unwrap_or(version);
                     if !version.is_empty() {
                         return Some(version.to_string());
                     }
@@ -407,10 +397,7 @@ mod tests {
     #[test]
     fn node_version_none() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(
-            extract_runtime_version(tmp.path(), &Language::NodeJs),
-            None
-        );
+        assert_eq!(extract_runtime_version(tmp.path(), &Language::NodeJs), None);
     }
 
     // -- Python -------------------------------------------------------------
@@ -488,10 +475,7 @@ mod tests {
     #[test]
     fn go_version_none() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(
-            extract_runtime_version(tmp.path(), &Language::Go),
-            None
-        );
+        assert_eq!(extract_runtime_version(tmp.path(), &Language::Go), None);
     }
 
     // -- Rust ---------------------------------------------------------------
@@ -663,11 +647,7 @@ mod tests {
     #[test]
     fn ruby_version_gemfile() {
         let tmp = TempDir::new().unwrap();
-        fs::write(
-            tmp.path().join("Gemfile"),
-            "ruby '3.1.4'\n",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("Gemfile"), "ruby '3.1.4'\n").unwrap();
         assert_eq!(
             extract_runtime_version(tmp.path(), &Language::Ruby),
             Some("3.1.4".to_string())
@@ -690,9 +670,6 @@ mod tests {
     #[test]
     fn empty_dir_returns_none() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(
-            extract_runtime_version(tmp.path(), &Language::NodeJs),
-            None
-        );
+        assert_eq!(extract_runtime_version(tmp.path(), &Language::NodeJs), None);
     }
 }

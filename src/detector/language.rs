@@ -121,7 +121,9 @@ fn detect_by_file_extensions(dir: &Path) -> (Language, PackageManager) {
         Some("rs") => (Language::Rust, PackageManager::Cargo),
         Some("py") => (Language::Python, PackageManager::Pip),
         Some("go") => (Language::Go, PackageManager::GoModules),
-        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") => (Language::NodeJs, PackageManager::Npm),
+        Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs") => {
+            (Language::NodeJs, PackageManager::Npm)
+        }
         Some("java") => (Language::Java, PackageManager::Maven),
         Some("php") => (Language::Php, PackageManager::Composer),
         Some("cs" | "fs") => (Language::DotNet, PackageManager::Nuget),
@@ -396,7 +398,11 @@ mod tests {
     #[test]
     fn ruby_bundler() {
         let tmp = TempDir::new().unwrap();
-        fs::write(tmp.path().join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+        fs::write(
+            tmp.path().join("Gemfile"),
+            "source 'https://rubygems.org'\n",
+        )
+        .unwrap();
         let (lang, pm) = detect_language_and_pm(tmp.path());
         assert_eq!(lang, Language::Ruby);
         assert_eq!(pm, PackageManager::Bundler);

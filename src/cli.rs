@@ -135,11 +135,7 @@ impl Cli {
     fn parse_port_overrides(&self) -> Vec<u16> {
         self.port
             .as_ref()
-            .map(|vals| {
-                vals.iter()
-                    .filter_map(|s| s.parse::<u16>().ok())
-                    .collect()
-            })
+            .map(|vals| vals.iter().filter_map(|s| s.parse::<u16>().ok()).collect())
             .unwrap_or_default()
     }
 }
@@ -246,10 +242,8 @@ mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Cli {
-        Cli::try_parse_from(
-            std::iter::once("dockgen").chain(args.iter().copied()),
-        )
-        .expect("failed to parse CLI arguments")
+        Cli::try_parse_from(std::iter::once("dockgen").chain(args.iter().copied()))
+            .expect("failed to parse CLI arguments")
     }
 
     // -- default arguments --------------------------------------------------

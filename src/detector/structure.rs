@@ -420,7 +420,10 @@ mod tests {
         assert_eq!(result.candidates.len(), 1);
 
         let svc = &result.candidates[0];
-        assert_eq!(svc.name, root.file_name().unwrap().to_string_lossy().as_ref());
+        assert_eq!(
+            svc.name,
+            root.file_name().unwrap().to_string_lossy().as_ref()
+        );
         assert_eq!(svc.service_type, ServiceType::Single);
         assert_eq!(svc.relative_path, PathBuf::from("."));
         assert!(svc.manifest_files.contains(&PathBuf::from("package.json")));
@@ -599,10 +602,18 @@ mod tests {
         assert!(names.contains(&"backend"));
         assert!(names.contains(&"frontend"));
 
-        let fe_candidate = result.candidates.iter().find(|c| c.name == "frontend").unwrap();
+        let fe_candidate = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "frontend")
+            .unwrap();
         assert_eq!(fe_candidate.service_type, ServiceType::Frontend);
 
-        let be_candidate = result.candidates.iter().find(|c| c.name == "backend").unwrap();
+        let be_candidate = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "backend")
+            .unwrap();
         assert_eq!(be_candidate.service_type, ServiceType::Backend);
     }
 
@@ -633,7 +644,11 @@ mod tests {
         assert!(result.is_monorepo);
         assert!(result.candidates.len() >= 3);
 
-        let paths: Vec<PathBuf> = result.candidates.iter().map(|c| c.relative_path.clone()).collect();
+        let paths: Vec<PathBuf> = result
+            .candidates
+            .iter()
+            .map(|c| c.relative_path.clone())
+            .collect();
         assert!(paths.contains(&PathBuf::from("apps/web")));
         assert!(paths.contains(&PathBuf::from("services/api")));
         assert!(paths.contains(&PathBuf::from("packages/shared")));
@@ -738,10 +753,18 @@ mod tests {
         assert!(result.workspace_tool.is_none());
         assert_eq!(result.candidates.len(), 2);
 
-        let fe_c = result.candidates.iter().find(|c| c.name == "frontend").unwrap();
+        let fe_c = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "frontend")
+            .unwrap();
         assert_eq!(fe_c.service_type, ServiceType::Frontend);
 
-        let be_c = result.candidates.iter().find(|c| c.name == "backend").unwrap();
+        let be_c = result
+            .candidates
+            .iter()
+            .find(|c| c.name == "backend")
+            .unwrap();
         assert_eq!(be_c.service_type, ServiceType::Backend);
     }
 
@@ -764,7 +787,11 @@ mod tests {
 
         let result = analyze_structure(root).unwrap();
 
-        let paths: Vec<PathBuf> = result.candidates.iter().map(|c| c.relative_path.clone()).collect();
+        let paths: Vec<PathBuf> = result
+            .candidates
+            .iter()
+            .map(|c| c.relative_path.clone())
+            .collect();
         let mut sorted = paths.clone();
         sorted.sort();
         assert_eq!(paths, sorted);

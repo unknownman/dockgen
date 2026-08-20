@@ -64,9 +64,14 @@ fn merge_opt(base: &mut ManifestInfo, other: &Option<ManifestInfo>) {
     base.dependencies.extend(extra.dependencies.iter().cloned());
     base.dev_dependencies
         .extend(extra.dev_dependencies.iter().cloned());
-    base.scripts.extend(extra.scripts.iter().map(|(k, v)| (k.clone(), v.clone())));
-    base.raw_content
-        .extend(extra.raw_content.iter().map(|(k, v)| (k.clone(), v.clone())));
+    base.scripts
+        .extend(extra.scripts.iter().map(|(k, v)| (k.clone(), v.clone())));
+    base.raw_content.extend(
+        extra
+            .raw_content
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -133,15 +138,16 @@ fn parse_cargo_toml(dir: &Path) -> Option<ManifestInfo> {
     let dev_dependencies = extract_toml_table_keys(table.get("dev-dependencies"));
 
     // Entrypoint: [[bin]] target or src/main.rs heuristic.
-    let entrypoint = table
-        .get("bin")
-        .and_then(|b| {
-            if let Some(arr) = b.as_array() {
-                arr.first().and_then(|f| f.get("path")).and_then(|v| v.as_str()).map(String::from)
-            } else {
-                b.get("path").and_then(|v| v.as_str()).map(String::from)
-            }
-        });
+    let entrypoint = table.get("bin").and_then(|b| {
+        if let Some(arr) = b.as_array() {
+            arr.first()
+                .and_then(|f| f.get("path"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        } else {
+            b.get("path").and_then(|v| v.as_str()).map(String::from)
+        }
+    });
 
     Some(ManifestInfo {
         package_name,
@@ -192,12 +198,18 @@ fn parse_pyproject_toml(dir: &Path) -> Option<ManifestInfo> {
 
     // [tool.poetry.dependencies] — table with keys as package names
     let poetry_deps = extract_toml_table_keys(
-        table.get("tool").and_then(|t| t.get("poetry")).and_then(|p| p.get("dependencies")),
+        table
+            .get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("dependencies")),
     );
 
     // [tool.poetry.dev-dependencies]
     let poetry_dev_deps = extract_toml_table_keys(
-        table.get("tool").and_then(|t| t.get("poetry")).and_then(|p| p.get("dev-dependencies")),
+        table
+            .get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("dev-dependencies")),
     );
 
     let mut dependencies = project_deps;
@@ -279,7 +291,9 @@ fn parse_go_mod(dir: &Path) -> Option<ManifestInfo> {
     // Extract module name from `module <path>`.
     let package_name = raw.lines().find_map(|line| {
         let trimmed = line.trim();
-        trimmed.strip_prefix("module ").map(|m| m.trim().to_string())
+        trimmed
+            .strip_prefix("module ")
+            .map(|m| m.trim().to_string())
     });
 
     // Parse require blocks.
@@ -418,8 +432,8 @@ fn parse_csproj(dir: &Path) -> Option<ManifestInfo> {
     })?;
 
     let raw = fs::read_to_string(&csproj_path).ok()?;
-    let package_name = extract_xml_tag(&raw, "AssemblyName")
-        .or_else(|| extract_xml_tag(&raw, "RootNamespace"));
+    let package_name =
+        extract_xml_tag(&raw, "AssemblyName").or_else(|| extract_xml_tag(&raw, "RootNamespace"));
 
     let dependencies = extract_csproj_packages(&raw, "PackageReference");
 
@@ -458,7 +472,7 @@ fn parse_gemfile(dir: &Path) -> Option<ManifestInfo> {
             let name = rest
                 .trim_start_matches(['\'', '"'])
                 .split_once(['\'', '"'])
-                    .map(|(name, _)| name.to_string());
+                .map(|(name, _)| name.to_string());
             name
         })
         .collect();
@@ -532,14 +546,10 @@ fn extract_gradle_deps(content: &str) -> Vec<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         for prefix in &["implementation", "api", "compileOnly", "runtimeOnly"] {
-            let after_prefix = trimmed
-                .strip_prefix(prefix)
-                .and_then(|rest| {
-                    let rest = rest.trim_start();
-                    rest.strip_prefix('(')
-                        .or(Some(rest))
-                        .map(|r| r.trim())
-                });
+            let after_prefix = trimmed.strip_prefix(prefix).and_then(|rest| {
+                let rest = rest.trim_start();
+                rest.strip_prefix('(').or(Some(rest)).map(|r| r.trim())
+            });
             if let Some(args) = after_prefix {
                 let artifact = if args.starts_with('\'') || args.starts_with('"') {
                     args.chars().next().and_then(|quote| {
@@ -631,7 +641,10 @@ mod tests {
         assert!(info.dependencies.contains(&"next".to_string()));
         assert!(info.dependencies.contains(&"react".to_string()));
         assert!(info.dev_dependencies.contains(&"typescript".to_string()));
-        assert_eq!(info.scripts.get("build").map(|s| s.as_str()), Some("next build"));
+        assert_eq!(
+            info.scripts.get("build").map(|s| s.as_str()),
+            Some("next build")
+        );
         assert!(info.raw_content.contains_key("package.json"));
     }
 
@@ -776,8 +789,12 @@ pytest = "*"
             info.package_name.as_deref(),
             Some("github.com/example/myapp")
         );
-        assert!(info.dependencies.contains(&"github.com/gin-gonic/gin".to_string()));
-        assert!(info.dependencies.contains(&"github.com/stretchr/testify".to_string()));
+        assert!(info
+            .dependencies
+            .contains(&"github.com/gin-gonic/gin".to_string()));
+        assert!(info
+            .dependencies
+            .contains(&"github.com/stretchr/testify".to_string()));
     }
 
     // -- composer.json ------------------------------------------------------
@@ -798,7 +815,9 @@ pytest = "*"
         let info = parse_composer_json(tmp.path()).unwrap();
         assert_eq!(info.package_name.as_deref(), Some("myvendor/myapp"));
         assert!(info.dependencies.contains(&"laravel/framework".to_string()));
-        assert!(info.dev_dependencies.contains(&"phpunit/phpunit".to_string()));
+        assert!(info
+            .dev_dependencies
+            .contains(&"phpunit/phpunit".to_string()));
     }
 
     // -- pom.xml ------------------------------------------------------------
@@ -827,7 +846,9 @@ pytest = "*"
 
         let info = parse_pom_xml(tmp.path()).unwrap();
         assert_eq!(info.package_name.as_deref(), Some("my-java-app"));
-        assert!(info.dependencies.contains(&"spring-boot-starter-web".to_string()));
+        assert!(info
+            .dependencies
+            .contains(&"spring-boot-starter-web".to_string()));
         assert!(info.dependencies.contains(&"gson".to_string()));
     }
 
@@ -847,8 +868,12 @@ pytest = "*"
         .unwrap();
 
         let info = parse_build_gradle(tmp.path()).unwrap();
-        assert!(info.dependencies.contains(&"org.springframework.boot:spring-boot-starter-web".to_string()));
-        assert!(info.dependencies.contains(&"com.google.code.gson:gson".to_string()));
+        assert!(info
+            .dependencies
+            .contains(&"org.springframework.boot:spring-boot-starter-web".to_string()));
+        assert!(info
+            .dependencies
+            .contains(&"com.google.code.gson:gson".to_string()));
     }
 
     #[test]
@@ -923,11 +948,7 @@ pytest = "*"
             r#"{"name": "web", "dependencies": {"react": "^18"}}"#,
         )
         .unwrap();
-        fs::write(
-            tmp.path().join("requirements.txt"),
-            "flask==2.3\n",
-        )
-        .unwrap();
+        fs::write(tmp.path().join("requirements.txt"), "flask==2.3\n").unwrap();
 
         let info = parse_directory_manifests(tmp.path());
         assert_eq!(info.package_name.as_deref(), Some("web"));
