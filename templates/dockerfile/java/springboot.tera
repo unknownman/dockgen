@@ -18,14 +18,16 @@ RUN ./mvnw package -DskipTests -B 2>/dev/null || \
     (gradle wrapper && ./gradlew bootJar --no-daemon)
 {% endif -%}
 
+RUN mkdir -p /app/build-out && \
+    (find target build/libs -name "*.jar" ! -name "*plain.jar" -exec cp {} /app/build-out/app.jar \; 2>/dev/null || true)
+
 # === Stage 2: Production runner ===
 FROM eclipse-temurin:{{ runtime_version | default(value="21") }}-jre-alpine AS runner
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
 
 WORKDIR /app
-COPY --from=builder --chown=appuser:appgroup /app/target/*.jar /app/app.jar 2>/dev/null || \
-    COPY --from=builder --chown=appuser:appgroup /app/build/libs/*.jar /app/app.jar
+COPY --from=builder --chown=appuser:appgroup /app/build-out/app.jar /app/app.jar
 
 USER appuser
 EXPOSE {{ port | default(value=8080) }}

@@ -5,8 +5,9 @@ mod generator;
 mod models;
 mod templates;
 
-use std::path::PathBuf;
+use std::path::Path;
 
+use anyhow::Context;
 use clap::Parser;
 use colored::Colorize;
 
@@ -76,7 +77,7 @@ fn run() -> anyhow::Result<()> {
 
         println!(
             "{}",
-            serde_json::to_string_pretty(&output).expect("JSON serialization failed")
+            serde_json::to_string_pretty(&output).context("failed to serialize JSON output")?
         );
         std::process::exit(0);
     }
@@ -187,7 +188,7 @@ fn print_analysis_report(analysis: &models::ProjectAnalysis) {
 fn print_summary(
     files: &[models::GeneratedFile],
     config: &models::GenerationConfig,
-    target_path: &PathBuf,
+    target_path: &Path,
 ) {
     println!("  {}", format!("Generated {} file(s):", files.len()).bold());
 

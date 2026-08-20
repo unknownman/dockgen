@@ -482,7 +482,7 @@ fn detect_java_framework(
     }
     if pom_content
         .as_deref()
-        .map_or(false, |c| c.contains("spring-boot"))
+        .is_some_and(|c| c.contains("spring-boot"))
     {
         return Some(java_result(Framework::SpringBoot));
     }
@@ -496,7 +496,7 @@ fn detect_java_framework(
     }
     if pom_content
         .as_deref()
-        .map_or(false, |c| c.contains("quarkus"))
+        .is_some_and(|c| c.contains("quarkus"))
     {
         return Some(java_result(Framework::Quarkus));
     }
@@ -510,7 +510,7 @@ fn detect_java_framework(
     }
     if pom_content
         .as_deref()
-        .map_or(false, |c| c.contains("micronaut"))
+        .is_some_and(|c| c.contains("micronaut"))
     {
         return Some(java_result(Framework::Micronaut));
     }

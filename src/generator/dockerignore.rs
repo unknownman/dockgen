@@ -89,6 +89,7 @@ mod tests {
     use super::*;
     use crate::models::*;
     use crate::templates::create_tera_engine;
+    use std::path::Path;
 
     fn make_service(name: &str, lang: Language) -> Service {
         Service {
@@ -161,13 +162,13 @@ mod tests {
         assert_eq!(files.len(), 3);
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("frontend/.dockerignore")));
+            .any(|f| f.relative_path == Path::new("frontend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("backend/.dockerignore")));
+            .any(|f| f.relative_path == Path::new("backend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from(".dockerignore")));
+            .any(|f| f.relative_path == Path::new(".dockerignore")));
     }
 
     #[test]

@@ -5,6 +5,30 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Directory names that are always excluded from traversal and heuristic scans.
+pub const EXCLUDED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    "dist",
+    "build",
+    ".venv",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".output",
+    ".cache",
+    "bin",
+    "obj",
+];
+
+// ---------------------------------------------------------------------------
 // Language
 // ---------------------------------------------------------------------------
 

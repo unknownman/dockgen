@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::models::{Language, PackageManager};
+use crate::models::{Language, PackageManager, EXCLUDED_DIRS};
 
 /// Detects the primary [`Language`] and [`PackageManager`] for a directory by
 /// inspecting manifest and lock files.
@@ -156,22 +156,6 @@ fn count_extensions(dir: &Path, counts: &mut HashMap<String, usize>, depth: u8) 
         }
     }
 }
-
-const EXCLUDED_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "vendor",
-    "dist",
-    "build",
-    ".venv",
-    "__pycache__",
-    ".next",
-    ".nuxt",
-    ".cache",
-    "bin",
-    "obj",
-];
 
 // ---------------------------------------------------------------------------
 // Tests

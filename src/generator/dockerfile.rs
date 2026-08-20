@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tera::Tera;
 
 use crate::models::{GeneratedFile, GenerationConfig, ProjectAnalysis, Service};
-use crate::templates::{create_tera_engine, resolve_dockerfile_template};
+use crate::templates::resolve_dockerfile_template;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -12,10 +12,11 @@ use crate::templates::{create_tera_engine, resolve_dockerfile_template};
 
 /// Generate `Dockerfile` contents for every service in the project.
 ///
-/// * **Single-service / `force_single`** – a single `Dockerfile` is placed at
-///   the output root.
+/// * **Single-service** – a single `Dockerfile` is placed at the output root.
 /// * **Monorepo** – a separate `Dockerfile` is placed inside each service's
 ///   relative directory.
+/// * **`force_single` on monorepo with mixed languages** – generates
+///   `Dockerfile.<service_name>` to avoid overwriting.
 pub fn generate_dockerfiles(
     analysis: &ProjectAnalysis,
     config: &GenerationConfig,
@@ -25,7 +26,17 @@ pub fn generate_dockerfiles(
         anyhow::bail!("no services to generate Dockerfiles for");
     }
 
-    let single = config.force_single || !analysis.is_monorepo || analysis.services.len() == 1;
+    let is_single_service = !analysis.is_monorepo || analysis.services.len() == 1;
+    let force_single = config.force_single && analysis.services.len() > 1;
+
+    // When force_single is true on a monorepo, check if all services share
+    // the same language. If so, a single unified Dockerfile is emitted.
+    // Otherwise, generate Dockerfile.<name> per service.
+    let all_same_lang = force_single
+        && analysis
+            .services
+            .windows(2)
+            .all(|w| w[0].language == w[1].language);
 
     let mut files = Vec::new();
 
@@ -37,8 +48,10 @@ pub fn generate_dockerfiles(
             format!("failed to render Dockerfile for service '{}'", service.name)
         })?;
 
-        let relative_path = if single {
+        let relative_path = if is_single_service {
             "Dockerfile".into()
+        } else if force_single && !all_same_lang {
+            std::path::PathBuf::from(format!("Dockerfile.{}", service.name))
         } else {
             std::path::PathBuf::from(service.name.clone()).join("Dockerfile")
         };
@@ -99,9 +112,11 @@ fn build_dockerfile_context(
     ctx.insert("language", &service.language.to_string());
     ctx.insert("framework", &service.framework.to_string());
 
-    // Environment variables.
-    let env_map: Vec<HashMap<&str, &str>> = service
-        .env_vars
+    // Environment variables — sorted by key for deterministic output.
+    let mut sorted_env: Vec<&(String, String)> = service.env_vars.iter().collect();
+    sorted_env.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let env_map: Vec<HashMap<&str, &str>> = sorted_env
         .iter()
         .map(|(k, v)| {
             let mut m = HashMap::new();
@@ -111,6 +126,9 @@ fn build_dockerfile_context(
         })
         .collect();
     ctx.insert("env_vars", &env_map);
+
+    // Assembly name for .NET templates.
+    ctx.insert("assembly_name", &service.name);
 
     ctx
 }
@@ -138,7 +156,8 @@ fn default_runtime_version(lang: &crate::models::Language) -> String {
 mod tests {
     use super::*;
     use crate::models::*;
-    use std::path::PathBuf;
+    use crate::templates::create_tera_engine;
+    use std::path::{Path, PathBuf};
 
     fn make_service(name: &str, lang: Language, fw: Framework) -> Service {
         Service {
@@ -228,9 +247,13 @@ mod tests {
 
         let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
         assert_eq!(files.len(), 2);
+        // Mixed languages with force_single → per-service named files.
         assert!(files
             .iter()
-            .all(|f| f.relative_path == PathBuf::from("Dockerfile")));
+            .any(|f| f.relative_path == Path::new("Dockerfile.a")));
+        assert!(files
+            .iter()
+            .any(|f| f.relative_path == Path::new("Dockerfile.b")));
     }
 
     #[test]

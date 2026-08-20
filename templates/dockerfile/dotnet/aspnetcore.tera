@@ -21,4 +21,4 @@ EXPOSE {{ port | default(value=8080) }}
 ENV ASPNETCORE_URLS=http://+:{{ port | default(value=8080) }} \
     DOTNET_RUNNING_IN_CONTAINER=true
 
-CMD ["dotnet", "app.dll"]
+CMD ["dotnet", "{{ assembly_name | default(value='app') }}.dll"]

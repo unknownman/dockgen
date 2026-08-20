@@ -2,31 +2,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::models::ServiceType;
+use crate::models::{ServiceType, EXCLUDED_DIRS};
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/// Default maximum directory depth for service discovery.
-const MAX_DEPTH: u8 = 3;
-
-/// Directory names that are always excluded from traversal.
-const EXCLUDED_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "vendor",
-    "dist",
-    "build",
-    ".venv",
-    "__pycache__",
-    ".next",
-    ".nuxt",
-    ".cache",
-    "bin",
-    "obj",
-];
 
 /// Manifest file names that indicate a service root.
 const MANIFEST_FILES: &[&str] = &[
@@ -165,6 +145,7 @@ fn detect_cargo_workspace(root: &Path) -> Option<String> {
 }
 
 /// Checks whether `package.json` at `root` contains a `"workspaces"` field.
+/// Disambiguates the workspace tool by checking for lockfiles.
 fn detect_npm_workspace(root: &Path) -> Option<String> {
     let pkg_path = root.join("package.json");
     if !pkg_path.is_file() {
@@ -173,7 +154,16 @@ fn detect_npm_workspace(root: &Path) -> Option<String> {
     let content = fs::read_to_string(&pkg_path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&content).ok()?;
     if value.get("workspaces").is_some() {
-        Some("npm".to_string())
+        // Disambiguate by lockfile presence.
+        if root.join("pnpm-lock.yaml").is_file() {
+            Some("pnpm".to_string())
+        } else if root.join("yarn.lock").is_file() {
+            Some("yarn".to_string())
+        } else if root.join("bun.lockb").is_file() || root.join("bun.lock").is_file() {
+            Some("bun".to_string())
+        } else {
+            Some("npm".to_string())
+        }
     } else {
         None
     }
@@ -312,16 +302,6 @@ fn discover_flat_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> {
 /// Returns `true` if `dir_name` is in the exclusion list.
 pub fn is_excluded(dir_name: &str) -> bool {
     EXCLUDED_DIRS.contains(&dir_name)
-}
-
-/// Returns the maximum scan depth.
-pub fn max_depth() -> u8 {
-    MAX_DEPTH
-}
-
-/// Returns the list of excluded directory names (for testing / external use).
-pub fn excluded_dirs() -> &'static [&'static str] {
-    EXCLUDED_DIRS
 }
 
 /// Scans `dir` (non-recursively) for known manifest file names and returns

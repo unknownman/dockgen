@@ -113,7 +113,7 @@ fn print_dry_run(files: &[GeneratedFile]) {
 mod tests {
     use super::*;
     use crate::models::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn make_service(name: &str, lang: Language, fw: Framework) -> Service {
         Service {
@@ -165,10 +165,10 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("Dockerfile")));
+            .any(|f| f.relative_path == Path::new("Dockerfile")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from(".dockerignore")));
+            .any(|f| f.relative_path == Path::new(".dockerignore")));
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(files.len(), 6);
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("docker-compose.yml")));
+            .any(|f| f.relative_path == Path::new("docker-compose.yml")));
     }
 
     #[test]

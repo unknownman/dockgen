@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
 
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/lib/python{{ runtime_version | default(value="3.11") }}/site-packages /usr/local/lib/python{{ runtime_version | default(value="3.11") }}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 

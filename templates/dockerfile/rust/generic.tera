@@ -20,7 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=deps /app/target /app/target
 COPY . .
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release && \
+    mkdir -p /app/bin && \
+    find target/release -maxdepth 1 -type f -executable -exec cp {} /app/bin/app \;
 
 # === Stage 3: Minimal runtime ===
 FROM debian:bookworm-slim AS runner
@@ -31,8 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
 
 WORKDIR /app
-COPY --from=builder --chown=appuser:appgroup /app/target/release/server /app/server 2>/dev/null || \
-    COPY --from=builder --chown=appuser:appgroup /app/target/release/* /app/
+COPY --from=builder --chown=appuser:appgroup /app/bin/app /app/server
 
 USER appuser
 EXPOSE {{ port | default(value=8080) }}

@@ -6,9 +6,10 @@ RUN apk add --no-cache \
     git unzip libzip-dev libpng-dev oniguruma-dev \
     && docker-php-ext-install pdo_mysql zip bcmath opcache
 
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
 COPY composer.json composer.lock ./
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
-    composer install --no-dev --no-scripts --no-autoloader --prefer-dist || true
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist || true
 
 # === Stage 2: Build the application ===
 FROM php:{{ runtime_version | default(value="8.2") }}-fpm-alpine AS builder
@@ -19,8 +20,7 @@ RUN apk add --no-cache \
     && docker-php-ext-install pdo_mysql zip bcmath opcache
 
 COPY composer.json composer.lock ./
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer && \
-    composer install --no-dev --prefer-dist --no-scripts
+RUN composer install --no-dev --prefer-dist --no-scripts
 
 COPY . .
 RUN composer dump-autoload --optimize --no-dev && \
