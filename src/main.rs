@@ -1,6 +1,7 @@
 mod analyzer;
 mod cli;
 mod detector;
+mod generator;
 mod models;
 mod templates;
 
