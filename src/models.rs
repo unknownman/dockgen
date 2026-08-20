@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -198,7 +199,7 @@ impl fmt::Display for Framework {
 // ---------------------------------------------------------------------------
 
 /// Selects the base image variant for generated Dockerfiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
 pub enum BaseImageVariant {
     Alpine,
     Slim,
