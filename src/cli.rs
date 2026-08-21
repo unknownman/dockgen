@@ -25,12 +25,12 @@ pub struct Cli {
 
     /// Explicitly override detected language (e.g., nodejs, python, go, rust,
     /// java, php, dotnet, ruby).
-    #[arg(short = 'l', long = "lang")]
+    #[arg(short = 'l', long = "lang", visible_alias = "language")]
     pub lang: Option<String>,
 
     /// Explicitly override detected framework (e.g., nextjs, fastapi, gin,
     /// axum, etc.).
-    #[arg(short = 'f', long = "fw")]
+    #[arg(short = 'f', long = "fw", visible_alias = "framework")]
     pub fw: Option<String>,
 
     /// Filter specific services/directories to generate Dockerfiles for.
@@ -44,7 +44,7 @@ pub struct Cli {
     pub services: Option<Vec<String>>,
 
     /// Force generation of a single unified multi-stage Dockerfile.
-    #[arg(long)]
+    #[arg(long, visible_alias = "force-single")]
     pub single: bool,
 
     /// Base image variant preference.
@@ -75,7 +75,7 @@ pub struct Cli {
     pub json: bool,
 
     /// Custom directory to write generated files.
-    #[arg(short = 'o', long = "output-dir")]
+    #[arg(short = 'o', long = "output-dir", visible_alias = "output")]
     pub output_dir: Option<PathBuf>,
 
     /// Enable verbose tracing/debug output.

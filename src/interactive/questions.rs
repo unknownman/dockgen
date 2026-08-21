@@ -57,9 +57,10 @@ pub fn build_questions(analysis: &ProjectAnalysis) -> Vec<InteractiveQuestion> {
             .build_command
             .as_deref()
             .is_some_and(|cmd| cmd.contains("prisma"));
-        let pkg_name_is_prisma = svc.package_name.as_deref().is_some_and(|p| {
-            p.contains("prisma") || p.contains("@prisma/client")
-        });
+        let pkg_name_is_prisma = svc
+            .package_name
+            .as_deref()
+            .is_some_and(|p| p.contains("prisma") || p.contains("@prisma/client"));
         (is_node && cmd_refers_to_prisma) || pkg_name_is_prisma
     });
 

@@ -143,11 +143,7 @@ fn build_infra_entries(
         let persists = infra_persists_data(infra.kind);
 
         // Only include volume mounts for infrastructure kinds that persist data.
-        let vol_array = if persists {
-            vec![vol_mount]
-        } else {
-            vec![]
-        };
+        let vol_array = if persists { vec![vol_mount] } else { vec![] };
 
         entries.push(serde_json::json!({
             "name": infra.name,

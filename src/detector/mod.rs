@@ -8,7 +8,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::analyzer::{analyze_env_files, analyze_manifests, extract_version};
+use crate::analyzer::{
+    analyze_env_files, analyze_manifests, extract_version, scan_project_env_infra,
+};
 use crate::models::{Framework, Language, ProjectAnalysis, Service, ServiceType};
 
 use self::framework::detect_framework;
@@ -129,6 +131,15 @@ pub fn analyze_full_project(
     }
 
     // --- Step 3: Infrastructure detection ---
+    // Scan root .env files via convenience API for diagnostics.
+    let root_env_scan = scan_project_env_infra(&root_path);
+    if !root_env_scan.url_matches.is_empty() {
+        tracing::debug!(
+            "root .env contains {} infrastructure URL(s)",
+            root_env_scan.url_matches.len()
+        );
+    }
+
     let detected_infrastructures =
         infra::detect_infrastructures(&root_path, &all_manifests, &merged_env);
 

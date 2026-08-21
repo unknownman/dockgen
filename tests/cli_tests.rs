@@ -679,11 +679,7 @@ fn test_compose_volume_declaration_consistency() {
     std::fs::write(root.join("index.js"), "console.log('hello');\n").unwrap();
 
     // .env with redis URL to get two infra kinds.
-    std::fs::write(
-        root.join(".env"),
-        "REDIS_URL=redis://localhost:6379\n",
-    )
-    .unwrap();
+    std::fs::write(root.join(".env"), "REDIS_URL=redis://localhost:6379\n").unwrap();
 
     let output = dockgen_cmd()
         .arg(root)
@@ -703,9 +699,7 @@ fn test_compose_volume_declaration_consistency() {
             .as_str()
             .is_some_and(|p| p == "docker-compose.yml")
     });
-    let compose_content = compose
-        .expect("docker-compose.yml not found")
-        ["content"]
+    let compose_content = compose.expect("docker-compose.yml not found")["content"]
         .as_str()
         .expect("missing content");
 
@@ -731,6 +725,223 @@ fn test_compose_volume_declaration_consistency() {
     assert!(
         compose_content.contains("redisdata:/data"),
         "redis volume mount missing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLI flag aliases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cli_flag_aliases() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"alias-app","dependencies":{}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("index.js"), "console.log('hello');\n").unwrap();
+
+    // --language alias should work identically to --lang / -l
+    let output = dockgen_cmd()
+        .arg(root)
+        .arg("--language")
+        .arg("rust")
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let services = json["analysis"]["services"]
+        .as_array()
+        .expect("missing services array");
+    assert!(!services.is_empty());
+    assert_eq!(services[0]["language"], "Rust");
+
+    // --framework alias should work identically to --fw / -f
+    let output2 = dockgen_cmd()
+        .arg(root)
+        .arg("--framework")
+        .arg("fastapi")
+        .arg("--lang")
+        .arg("python")
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json2: serde_json::Value = serde_json::from_slice(&output2).unwrap();
+    let services2 = json2["analysis"]["services"]
+        .as_array()
+        .expect("missing services array");
+    assert!(!services2.is_empty());
+    assert_eq!(services2[0]["framework"], "FastApi");
+
+    // --force-single alias should work identically to --single
+    dockgen_cmd()
+        .arg(root)
+        .arg("--force-single")
+        .arg("--dry-run")
+        .arg("--quiet")
+        .assert()
+        .success();
+
+    // --output alias should work identically to --output-dir / -o
+    let out_dir = tempfile::tempdir().unwrap();
+    dockgen_cmd()
+        .arg(root)
+        .arg("--output")
+        .arg(out_dir.path())
+        .arg("--quiet")
+        .assert()
+        .success();
+    assert!(
+        out_dir.path().join("Dockerfile").exists(),
+        "--output alias should write Dockerfile to specified directory"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Multi-infra compose synthesis: Postgres + Redis + RabbitMQ
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_multi_infra_compose_generation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Node.js project with pg, ioredis, and amqplib dependencies.
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"multi-infra","scripts":{"start":"node index.js"},"dependencies":{"pg":"^8.11.0","ioredis":"^5.3.0","amqplib":"^0.10.0"}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("index.js"), "console.log('multi infra app');\n").unwrap();
+
+    // .env file with postgres, redis, and rabbitmq URLs.
+    std::fs::write(
+        root.join(".env"),
+        "DATABASE_URL=postgres://user:pass@localhost:5432/myapp\nREDIS_URL=redis://localhost:6379\nAMQP_URL=amqp://guest:guest@localhost:5672\n",
+    )
+    .unwrap();
+
+    let output = dockgen_cmd()
+        .arg(root)
+        .arg("--json")
+        .arg("--compose")
+        .arg("-y")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    // Verify all three infra kinds are detected.
+    let infra = json["analysis"]["detected_infrastructures"]
+        .as_array()
+        .expect("missing detected_infrastructures array");
+    let detected_kinds: Vec<&str> = infra.iter().filter_map(|i| i["kind"].as_str()).collect();
+    assert!(
+        detected_kinds.contains(&"Postgres"),
+        "expected Postgres in detected infra, got: {detected_kinds:?}"
+    );
+    assert!(
+        detected_kinds.contains(&"Redis"),
+        "expected Redis in detected infra, got: {detected_kinds:?}"
+    );
+    assert!(
+        detected_kinds.contains(&"RabbitMq"),
+        "expected RabbitMq in detected infra, got: {detected_kinds:?}"
+    );
+
+    // Verify compose file exists and contains all three service blocks.
+    let files = json["files"].as_array().expect("missing files array");
+    let compose = files.iter().find(|f| {
+        f["relative_path"]
+            .as_str()
+            .is_some_and(|p| p == "docker-compose.yml")
+    });
+    let compose_content = compose.expect("docker-compose.yml not found")["content"]
+        .as_str()
+        .expect("missing content");
+
+    // Service blocks present.
+    assert!(
+        compose_content.contains("postgres:"),
+        "compose missing postgres service"
+    );
+    assert!(
+        compose_content.contains("redis:"),
+        "compose missing redis service"
+    );
+    assert!(
+        compose_content.contains("rabbitmq:"),
+        "compose missing rabbitmq service"
+    );
+
+    // Correct images.
+    assert!(
+        compose_content.contains("postgres:16-alpine"),
+        "wrong postgres image"
+    );
+    assert!(
+        compose_content.contains("redis:7-alpine"),
+        "wrong redis image"
+    );
+    assert!(
+        compose_content.contains("rabbitmq:3-management-alpine"),
+        "wrong rabbitmq image"
+    );
+
+    // Port allocations.
+    assert!(
+        compose_content.contains("5432:5432"),
+        "missing postgres port mapping"
+    );
+    assert!(
+        compose_content.contains("6379:6379"),
+        "missing redis port mapping"
+    );
+    assert!(
+        compose_content.contains("5672:5672"),
+        "missing rabbitmq port mapping"
+    );
+
+    // Volume bindings for data-persisting services.
+    assert!(
+        compose_content.contains("postgresdata:/var/lib/postgresql/data"),
+        "missing postgres volume mount"
+    );
+    assert!(
+        compose_content.contains("redisdata:/data"),
+        "missing redis volume mount"
+    );
+    assert!(
+        compose_content.contains("rabbitmqdata:/var/lib/rabbitmq"),
+        "missing rabbitmq volume mount"
+    );
+
+    // Top-level volumes block declares all named volumes.
+    assert!(
+        compose_content.contains("postgresdata:"),
+        "postgresdata not in top-level volumes"
+    );
+    assert!(
+        compose_content.contains("redisdata:"),
+        "redisdata not in top-level volumes"
+    );
+    assert!(
+        compose_content.contains("rabbitmqdata:"),
+        "rabbitmqdata not in top-level volumes"
     );
 }
 

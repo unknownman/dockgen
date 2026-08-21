@@ -7,7 +7,8 @@ use std::path::Path;
 
 use crate::models::Language;
 
-use self::dependencies::ManifestInfo;
+pub use self::dependencies::ManifestInfo;
+pub use self::env::InfraScanResult;
 
 /// Parses all detectable manifests in `dir_path` and returns a merged
 /// [`ManifestInfo`].
@@ -28,4 +29,14 @@ pub fn extract_version(dir_path: &Path, language: &Language) -> Option<String> {
 /// > `.env.production` > `.env.example`.
 pub fn analyze_env_files(dir_path: &Path) -> BTreeMap<String, String> {
     env::parse_env_files(dir_path)
+}
+
+/// Parses `.env` files in `dir_path` and detects infrastructure connection
+/// strings (URLs, well-known keys).
+///
+/// Returns an [`InfraScanResult`] containing URL-pattern matches and
+/// well-known infrastructure variable names found in the environment.
+pub fn scan_project_env_infra(dir_path: &Path) -> InfraScanResult {
+    let env = env::parse_env_files(dir_path);
+    env::detect_infra_connections(&env)
 }
