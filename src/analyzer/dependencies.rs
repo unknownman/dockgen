@@ -6,8 +6,10 @@ use std::path::Path;
 // ManifestInfo
 // ---------------------------------------------------------------------------
 
+use serde::{Deserialize, Serialize};
+
 /// Aggregated metadata extracted from project manifest files.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestInfo {
     /// Package / project name (e.g. `"my-api"`).
     pub package_name: Option<String>,

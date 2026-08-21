@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -140,7 +141,7 @@ pub fn parse_env_content(content: &str) -> BTreeMap<String, String> {
 }
 
 /// Represents an infrastructure connection detected from environment variables.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionMatch {
     /// The variable name (e.g. `DATABASE_URL`).
     pub variable: String,
@@ -193,7 +194,7 @@ pub fn detect_infra_connections(env: &BTreeMap<String, String>) -> InfraScanResu
 // ---------------------------------------------------------------------------
 
 /// Result of scanning environment variables for infrastructure indicators.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InfraScanResult {
     /// URL-pattern matches found in variable values.
     pub url_matches: Vec<ConnectionMatch>,
