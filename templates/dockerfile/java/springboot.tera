@@ -1,30 +1,40 @@
-# === Stage 1: Build with Maven ===
-FROM eclipse-temurin:{{ runtime_version | default(value="21") }}-jdk-alpine AS builder
+{% set img_version = runtime_version | default(value="21") %}
+{% if base_image_variant == "slim" %}
+{% set jdk_base = "eclipse-temurin:" ~ img_version ~ "-jdk-jammy" %}
+{% set jre_base = "eclipse-temurin:" ~ img_version ~ "-jre-jammy" %}
+{% else %}
+{% set jdk_base = "eclipse-temurin:" ~ img_version ~ "-jdk-alpine" %}
+{% set jre_base = "eclipse-temurin:" ~ img_version ~ "-jre-alpine" %}
+{% endif %}
+# === Stage 1: Build ===
+FROM {{ jdk_base }} AS builder
 WORKDIR /app
-
-COPY pom.xml mvnw ./
-COPY .mvn .mvn
-RUN ./mvnw dependency:go-offline -B 2>/dev/null || true
-
-COPY src ./src
 
 {% if build_tool | default(value="maven") == "gradle" -%}
 COPY gradlew build.gradle* settings.gradle* ./
 COPY gradle gradle
-RUN ./gradlew bootJar --no-daemon 2>/dev/null || \
-    ./mvnw package -DskipTests -B
+COPY src ./src
+RUN ./gradlew bootJar --no-daemon
 {% else -%}
-RUN ./mvnw package -DskipTests -B 2>/dev/null || \
-    (gradle wrapper && ./gradlew bootJar --no-daemon)
+COPY pom.xml mvnw ./
+COPY .mvn .mvn
+RUN ./mvnw dependency:go-offline -B 2>/dev/null || true
+COPY src ./src
+RUN ./mvnw package -DskipTests -B
 {% endif -%}
 
 RUN mkdir -p /app/build-out && \
     (find target build/libs -name "*.jar" ! -name "*plain.jar" -exec cp {} /app/build-out/app.jar \; 2>/dev/null || true)
 
 # === Stage 2: Production runner ===
-FROM eclipse-temurin:{{ runtime_version | default(value="21") }}-jre-alpine AS runner
+FROM {{ jre_base }} AS runner
+{% if base_image_variant == "alpine" or base_image_variant is not defined or base_image_variant == "default" %}
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+{% else %}
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+{% endif %}
 
 WORKDIR /app
 COPY --from=builder --chown=appuser:appgroup /app/build-out/app.jar /app/app.jar

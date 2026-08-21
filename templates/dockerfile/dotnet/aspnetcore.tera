@@ -1,5 +1,13 @@
+{% set img_version = runtime_version | default(value="8.0") %}
+{% if base_image_variant == "slim" %}
+{% set sdk_base = "mcr.microsoft.com/dotnet/sdk:" ~ img_version ~ "-jammy" %}
+{% set aspnet_base = "mcr.microsoft.com/dotnet/aspnet:" ~ img_version ~ "-jammy" %}
+{% else %}
+{% set sdk_base = "mcr.microsoft.com/dotnet/sdk:" ~ img_version ~ "-alpine" %}
+{% set aspnet_base = "mcr.microsoft.com/dotnet/aspnet:" ~ img_version ~ "-alpine" %}
+{% endif %}
 # === Stage 1: Build the application ===
-FROM mcr.microsoft.com/dotnet/sdk:{{ runtime_version | default(value="8.0") }}-alpine AS builder
+FROM {{ sdk_base }} AS builder
 WORKDIR /src
 
 COPY *.csproj *.fsproj ./
@@ -9,9 +17,14 @@ COPY . .
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
 # === Stage 2: Production runner ===
-FROM mcr.microsoft.com/dotnet/aspnet:{{ runtime_version | default(value="8.0") }}-alpine AS runner
+FROM {{ aspnet_base }} AS runner
+{% if base_image_variant == "alpine" or base_image_variant is not defined or base_image_variant == "default" %}
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+{% else %}
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+{% endif %}
 
 WORKDIR /app
 COPY --from=builder --chown=appuser:appgroup /app/publish .

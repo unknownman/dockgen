@@ -1,9 +1,17 @@
+{% set img_version = runtime_version | default(value="20") %}
+{% if base_image_variant == "slim" %}
+{% set node_base = "node:" ~ img_version ~ "-slim" %}
+{% else %}
+{% set node_base = "node:" ~ img_version ~ "-alpine" %}
+{% endif %}
 # === Stage 1: Install dependencies ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS deps
+FROM {{ node_base }} AS deps
 WORKDIR /app
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* bun.lockb* bun.lock* ./
 RUN \
-  if [ -f pnpm-lock.yaml ]; then \
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then \
+    npm install -g bun && bun install --frozen-lockfile; \
+  elif [ -f pnpm-lock.yaml ]; then \
     corepack enable && pnpm install --frozen-lockfile; \
   elif [ -f yarn.lock ]; then \
     yarn install --frozen-lockfile; \
@@ -14,7 +22,7 @@ RUN \
   fi
 
 # === Stage 2: Build the application ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS builder
+FROM {{ node_base }} AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -26,7 +34,7 @@ RUN if [ -f tsconfig.json ]; then npm run build; fi
 {% endif -%}
 
 # === Stage 3: Production runner ===
-FROM node:{{ runtime_version | default(value="20") }}-alpine AS runner
+FROM {{ node_base }} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -34,7 +42,7 @@ RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 appuser
 
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/{{ entrypoint_dir }} ./{{ entrypoint_dir }}
 COPY --from=builder /app/package.json ./package.json
 
 USER appuser
@@ -43,5 +51,5 @@ EXPOSE {{ port | default(value=3000) }}
 {% if start_command -%}
 CMD ["sh", "-c", "{{ start_command }}"]
 {% else -%}
-CMD ["node", "dist/index.js"]
+CMD ["node", "{{ entrypoint_dir }}/{{ entrypoint_file }}"]
 {% endif -%}

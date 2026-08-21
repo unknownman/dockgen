@@ -16,9 +16,16 @@ RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --no-in
 FROM {{ php_base }} AS builder
 WORKDIR /app
 
+{% if base_image_variant == "alpine" or base_image_variant is not defined or base_image_variant == "default" %}
 RUN apk add --no-cache \
     git unzip libzip-dev libpng-dev oniguruma-dev \
     && docker-php-ext-install pdo_mysql zip bcmath opcache
+{% else %}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git unzip libzip-dev libpng-dev libonig-dev \
+    && docker-php-ext-install pdo_mysql zip bcmath opcache \
+    && rm -rf /var/lib/apt/lists/*
+{% endif %}
 
 COPY --from=composer-deps /app/vendor /app/vendor
 COPY composer.json composer.lock* ./
@@ -26,17 +33,19 @@ RUN composer install --no-dev --prefer-dist --no-scripts --no-interaction 2>/dev
 
 COPY . .
 RUN composer dump-autoload --optimize --no-dev && \
-    php artisan config:cache && \
-    php artisan route:cache && \
+    php artisan config:cache 2>/dev/null || true && \
+    php artisan route:cache 2>/dev/null || true && \
     php artisan view:cache 2>/dev/null || true
 
 {% if has_frontend_assets %}
 # === Stage 2b: Build frontend assets (Vite / Inertia / esbuild) ===
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* bun.lockb* bun.lock* ./
 RUN \
-  if [ -f pnpm-lock.yaml ]; then \
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then \
+    npm install -g bun && bun install --frozen-lockfile; \
+  elif [ -f pnpm-lock.yaml ]; then \
     corepack enable && pnpm install --frozen-lockfile; \
   elif [ -f yarn.lock ]; then \
     yarn install --frozen-lockfile; \

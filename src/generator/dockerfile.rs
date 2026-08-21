@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use tera::Tera;
 
-use crate::models::{GeneratedFile, GenerationConfig, PackageManager, ProjectAnalysis, Service};
+use crate::models::{
+    Framework, GeneratedFile, GenerationConfig, Language, PackageManager, ProjectAnalysis, Service,
+};
 use crate::templates::resolve_dockerfile_template;
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,11 @@ pub fn generate_dockerfiles(
             .windows(2)
             .all(|w| w[0].language == w[1].language);
 
+    // Emit a single root Dockerfile when:
+    // - single service, OR
+    // - force_single with all services sharing the same language.
+    let emit_single_root = is_single_service || (force_single && all_same_lang);
+
     let mut files = Vec::new();
 
     for (idx, service) in analysis.services.iter().enumerate() {
@@ -48,7 +55,7 @@ pub fn generate_dockerfiles(
             format!("failed to render Dockerfile for service '{}'", service.name)
         })?;
 
-        let relative_path = if is_single_service {
+        let relative_path = if emit_single_root {
             "Dockerfile".into()
         } else if force_single && !all_same_lang {
             std::path::PathBuf::from(format!("Dockerfile.{}", service.name))
@@ -114,6 +121,13 @@ fn build_dockerfile_context(
     ctx.insert("language", &service.language.to_string());
     ctx.insert("framework", &service.framework.to_string());
 
+    // Build tool for Java (maven vs gradle).
+    let build_tool = match service.package_manager {
+        PackageManager::Gradle => "gradle",
+        _ => "maven",
+    };
+    ctx.insert("build_tool", &build_tool);
+
     // Hybrid asset build: detect if a Node.js frontend build step is needed.
     // When a backend service (PHP, Python, Ruby, etc.) also has a
     // `package.json`, the templates can optionally run a Node build stage
@@ -130,6 +144,11 @@ fn build_dockerfile_context(
         _ => "npm",
     };
     ctx.insert("node_pm", &node_pm.to_string());
+
+    // Framework-specific entrypoint and start configuration.
+    let (entrypoint_file, entrypoint_dir) = framework_entrypoint(&service.framework);
+    ctx.insert("entrypoint_file", &entrypoint_file);
+    ctx.insert("entrypoint_dir", &entrypoint_dir);
 
     // Environment variables — sorted by key for deterministic output.
     let mut sorted_env: Vec<&(String, String)> = service.env_vars.iter().collect();
@@ -153,22 +172,74 @@ fn build_dockerfile_context(
 }
 
 /// Returns `true` if the language is a Node.js variant.
-fn is_node_language(lang: &crate::models::Language) -> bool {
-    matches!(lang, crate::models::Language::NodeJs)
+fn is_node_language(lang: &Language) -> bool {
+    matches!(lang, Language::NodeJs)
+}
+
+/// Returns `(entrypoint_file, entrypoint_dir)` for framework-specific
+/// runtime entry points.
+fn framework_entrypoint(fw: &Framework) -> (String, String) {
+    match fw {
+        // Node.js SSR frameworks
+        Framework::SvelteKit => ("index.js".into(), "build".into()),
+        Framework::Remix => ("index.js".into(), "build/server".into()),
+        Framework::Astro => ("entry.mjs".into(), "dist/server".into()),
+        Framework::Fastify => ("index.js".into(), "dist".into()),
+        // Node.js defaults
+        Framework::NextJs => ("server.js".into(), ".".into()),
+        Framework::Nuxt => ("index.mjs".into(), ".output/server".into()),
+        Framework::NestJs => ("main.js".into(), "dist".into()),
+        Framework::Express | Framework::NodeGeneric => ("index.js".into(), "dist".into()),
+        // Python
+        Framework::FastApi | Framework::Starlette | Framework::Litestar => {
+            ("app".into(), ".".into())
+        }
+        Framework::Django => ("wsgi.py".into(), "config".into()),
+        Framework::Flask | Framework::PythonGeneric => ("app.py".into(), ".".into()),
+        // Go
+        Framework::Gin
+        | Framework::Echo
+        | Framework::Fiber
+        | Framework::Chi
+        | Framework::GoGeneric => ("server".into(), ".".into()),
+        // Rust
+        Framework::Axum
+        | Framework::ActixWeb
+        | Framework::Rocket
+        | Framework::Warp
+        | Framework::RustGeneric => ("server".into(), ".".into()),
+        // Java
+        Framework::SpringBoot
+        | Framework::Quarkus
+        | Framework::Micronaut
+        | Framework::JavaGeneric => ("app.jar".into(), ".".into()),
+        // PHP
+        Framework::Laravel | Framework::Symfony | Framework::PhpGeneric => {
+            ("index.php".into(), ".".into())
+        }
+        // .NET
+        Framework::AspNetCore | Framework::DotNetGeneric => ("app.dll".into(), ".".into()),
+        // Ruby
+        Framework::Rails | Framework::Sinatra | Framework::RubyGeneric => {
+            ("config.ru".into(), ".".into())
+        }
+        // Generic fallback
+        Framework::Generic => ("server".into(), ".".into()),
+    }
 }
 
 /// Sensible default runtime version strings per language family.
-fn default_runtime_version(lang: &crate::models::Language) -> String {
+fn default_runtime_version(lang: &Language) -> String {
     match lang {
-        crate::models::Language::NodeJs => "20".into(),
-        crate::models::Language::Python => "3.11".into(),
-        crate::models::Language::Go => "1.22".into(),
-        crate::models::Language::Rust => "1.78".into(),
-        crate::models::Language::Java => "21".into(),
-        crate::models::Language::Php => "8.2".into(),
-        crate::models::Language::DotNet => "8.0".into(),
-        crate::models::Language::Ruby => "3.2".into(),
-        crate::models::Language::Unknown(_) => "latest".into(),
+        Language::NodeJs => "20".into(),
+        Language::Python => "3.11".into(),
+        Language::Go => "1.22".into(),
+        Language::Rust => "1.78".into(),
+        Language::Java => "21".into(),
+        Language::Php => "8.2".into(),
+        Language::DotNet => "8.0".into(),
+        Language::Ruby => "3.2".into(),
+        Language::Unknown(_) => "latest".into(),
     }
 }
 
@@ -281,6 +352,27 @@ mod tests {
     }
 
     #[test]
+    fn force_single_same_lang_unified() {
+        let svcs = vec![
+            make_service("a", Language::Go, Framework::Gin),
+            make_service("b", Language::Go, Framework::Echo),
+        ];
+        let analysis = make_analysis(svcs, true);
+        let config = GenerationConfig {
+            force_single: true,
+            ..default_config()
+        };
+        let tera = tera_engine();
+
+        let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
+        assert_eq!(files.len(), 2);
+        // Same language with force_single → unified root Dockerfile.
+        assert!(files
+            .iter()
+            .all(|f| f.relative_path == Path::new("Dockerfile")));
+    }
+
+    #[test]
     fn port_override_by_index() {
         let svcs = vec![
             make_service("a", Language::NodeJs, Framework::NodeGeneric),
@@ -340,5 +432,61 @@ mod tests {
         let f1 = generate_dockerfiles(&analysis, &config, &tera).unwrap();
         let f2 = generate_dockerfiles(&analysis, &config, &tera).unwrap();
         assert_eq!(f1[0].content, f2[0].content);
+    }
+
+    #[test]
+    fn build_tool_gradle_injected() {
+        let mut svc = make_service("api", Language::Java, Framework::SpringBoot);
+        svc.package_manager = PackageManager::Gradle;
+        let analysis = make_analysis(vec![svc], false);
+        let config = default_config();
+        let tera = tera_engine();
+
+        let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
+        assert!(files[0].content.contains("gradlew"));
+    }
+
+    #[test]
+    fn build_tool_maven_default() {
+        let svc = make_service("api", Language::Java, Framework::SpringBoot);
+        let analysis = make_analysis(vec![svc], false);
+        let config = default_config();
+        let tera = tera_engine();
+
+        let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
+        assert!(files[0].content.contains("mvnw"));
+    }
+
+    #[test]
+    fn bun_lockfile_detected_in_node_deps() {
+        let svc = make_service("web", Language::NodeJs, Framework::NodeGeneric);
+        let analysis = make_analysis(vec![svc], false);
+        let config = default_config();
+        let tera = tera_engine();
+
+        let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
+        // The node/generic template should include bun.lockb detection.
+        assert!(files[0].content.contains("bun.lockb") || files[0].content.contains("bun.lock"));
+    }
+
+    #[test]
+    fn framework_entrypoint_sveltekit() {
+        let (file, dir) = framework_entrypoint(&Framework::SvelteKit);
+        assert_eq!(file, "index.js");
+        assert_eq!(dir, "build");
+    }
+
+    #[test]
+    fn framework_entrypoint_astro() {
+        let (file, dir) = framework_entrypoint(&Framework::Astro);
+        assert_eq!(file, "entry.mjs");
+        assert_eq!(dir, "dist/server");
+    }
+
+    #[test]
+    fn framework_entrypoint_remix() {
+        let (file, dir) = framework_entrypoint(&Framework::Remix);
+        assert_eq!(file, "index.js");
+        assert_eq!(dir, "build/server");
     }
 }

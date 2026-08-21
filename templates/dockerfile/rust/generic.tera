@@ -31,9 +31,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release && \
-    mkdir -p /app/bin && \
-    find target/release -maxdepth 1 -type f -executable -exec cp {} /app/bin/app \;
+RUN cargo build --release
 
 # === Stage 3: Minimal runtime ===
 FROM {{ runner_base }} AS runner
@@ -47,7 +45,13 @@ RUN groupadd --gid 1001 appgroup && \
 {% endif %}
 
 WORKDIR /app
-COPY --from=builder --chown=appuser:appgroup /app/bin/app /app/server
+# Copy the release binary. We use a glob to handle any crate bin name,
+# then rename to a stable 'server' entrypoint.
+COPY --from=builder --chown=appuser:appgroup /app/target/release/* /tmp/
+RUN cp /tmp/server /app/server 2>/dev/null || \
+    (find /tmp -maxdepth 1 -type f -executable -exec cp {} /app/server \; 2>/dev/null) || \
+    cp /tmp/app /app/server 2>/dev/null || true
+RUN rm -f /tmp/server /tmp/app 2>/dev/null || true
 
 USER appuser
 EXPOSE {{ port | default(value=8080) }}

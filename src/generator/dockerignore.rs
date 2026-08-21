@@ -1,8 +1,10 @@
-use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 use tera::Tera;
 
-use crate::models::{GeneratedFile, GenerationConfig, ProjectAnalysis};
+use crate::models::{GeneratedFile, GenerationConfig, Language, ProjectAnalysis};
 use crate::templates::resolve_dockerignore_template;
 
 // ---------------------------------------------------------------------------
@@ -12,8 +14,8 @@ use crate::templates::resolve_dockerignore_template;
 /// Generate `.dockerignore` files for the project.
 ///
 /// * **Monorepo** – one `.dockerignore` per service subdirectory.
-/// * **Always** – a root-level `.dockerignore` is emitted (unless the root
-///   service already covers it).
+/// * **Always** – a root-level `.dockerignore` is emitted. For polyglot
+///   monorepos, ignore rules from all detected service languages are merged.
 pub fn generate_dockerignores(
     analysis: &ProjectAnalysis,
     config: &GenerationConfig,
@@ -62,22 +64,59 @@ pub fn generate_dockerignores(
             });
         }
 
-        // Root-level .dockerignore covering the whole project.
-        // Use the first service's language as a sensible default, or the most
-        // common one.
-        let root_lang = &analysis.services[0].language;
-        let tpl_path = resolve_dockerignore_template(root_lang);
-        let content = tera
-            .render(tpl_path, &tera::Context::new())
-            .context("failed to render root .dockerignore")?;
+        // Root-level .dockerignore: merge rules from all service languages.
+        let root_content = synthesize_polyglot_dockerignore(analysis, tera)?;
         files.push(GeneratedFile {
             relative_path: ".dockerignore".into(),
-            content,
-            description: "root .dockerignore".into(),
+            content: root_content,
+            description: "root .dockerignore (polyglot merged)".into(),
         });
     }
 
     Ok(files)
+}
+
+// ---------------------------------------------------------------------------
+// Polyglot root synthesis
+// ---------------------------------------------------------------------------
+
+/// Render the ignore template for every unique language in the project,
+/// deduplicate lines, and produce a single merged `.dockerignore`.
+fn synthesize_polyglot_dockerignore(analysis: &ProjectAnalysis, tera: &Tera) -> Result<String> {
+    let mut seen_languages = BTreeSet::new();
+    let mut all_lines = Vec::new();
+
+    // Always include the generic ignore patterns.
+    let generic_tpl = resolve_dockerignore_template(&Language::Unknown("root".into()));
+    if let Ok(content) = tera.render(generic_tpl, &tera::Context::new()) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !all_lines.contains(&trimmed.to_string()) {
+                all_lines.push(trimmed.to_string());
+            }
+        }
+    }
+
+    // Collect unique languages.
+    for service in &analysis.services {
+        if seen_languages.insert(service.language.to_string()) {
+            let tpl_path = resolve_dockerignore_template(&service.language);
+            if let Ok(content) = tera.render(tpl_path, &tera::Context::new()) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() && !all_lines.contains(&trimmed.to_string()) {
+                        all_lines.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort for deterministic output.
+    all_lines.sort();
+    all_lines.dedup();
+
+    Ok(all_lines.join("\n") + "\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +128,6 @@ mod tests {
     use super::*;
     use crate::models::*;
     use crate::templates::create_tera_engine;
-    use std::path::Path;
 
     fn make_service(name: &str, lang: Language) -> Service {
         Service {
@@ -162,13 +200,13 @@ mod tests {
         assert_eq!(files.len(), 3);
         assert!(files
             .iter()
-            .any(|f| f.relative_path == Path::new("frontend/.dockerignore")));
+            .any(|f| f.relative_path == PathBuf::from("frontend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == Path::new("backend/.dockerignore")));
+            .any(|f| f.relative_path == PathBuf::from("backend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == Path::new(".dockerignore")));
+            .any(|f| f.relative_path == PathBuf::from(".dockerignore")));
     }
 
     #[test]
@@ -208,5 +246,52 @@ mod tests {
         let f1 = generate_dockerignores(&analysis, &config, &tera).unwrap();
         let f2 = generate_dockerignores(&analysis, &config, &tera).unwrap();
         assert_eq!(f1[0].content, f2[0].content);
+    }
+
+    #[test]
+    fn polyglot_root_merges_all_languages() {
+        let svcs = vec![
+            make_service("frontend", Language::NodeJs),
+            make_service("api", Language::Python),
+            make_service("worker", Language::Go),
+        ];
+        let analysis = make_analysis(svcs, true);
+        let config = default_config();
+        let tera = tera_engine();
+
+        let files = generate_dockerignores(&analysis, &config, &tera).unwrap();
+        let root = files
+            .iter()
+            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .expect("root .dockerignore missing");
+
+        // Should contain rules from all three languages.
+        assert!(root.content.contains("node_modules"), "missing Node rule");
+        assert!(root.content.contains("__pycache__"), "missing Python rule");
+        assert!(root.content.contains("vendor"), "missing Go rule");
+        assert!(root.description.contains("polyglot"));
+    }
+
+    #[test]
+    fn polyglot_root_is_deterministic() {
+        let svcs = vec![
+            make_service("frontend", Language::NodeJs),
+            make_service("api", Language::Python),
+        ];
+        let analysis = make_analysis(svcs, true);
+        let config = default_config();
+        let tera = tera_engine();
+
+        let f1 = generate_dockerignores(&analysis, &config, &tera).unwrap();
+        let f2 = generate_dockerignores(&analysis, &config, &tera).unwrap();
+        let root1 = f1
+            .iter()
+            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .unwrap();
+        let root2 = f2
+            .iter()
+            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .unwrap();
+        assert_eq!(root1.content, root2.content);
     }
 }
