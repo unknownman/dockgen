@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use tera::Tera;
@@ -17,8 +18,8 @@ use crate::templates::resolve_dockerfile_template;
 /// * **Single-service** – a single `Dockerfile` is placed at the output root.
 /// * **Monorepo** – a separate `Dockerfile` is placed inside each service's
 ///   relative directory.
-/// * **`force_single` on monorepo with mixed languages** – generates
-///   `Dockerfile.<service_name>` to avoid overwriting.
+/// * **`force_single`** – generates `Dockerfile.<service_name>` per service to
+///   avoid overwriting when multiple services are collapsed to the root.
 pub fn generate_dockerfiles(
     analysis: &ProjectAnalysis,
     config: &GenerationConfig,
@@ -31,20 +32,6 @@ pub fn generate_dockerfiles(
     let is_single_service = !analysis.is_monorepo || analysis.services.len() == 1;
     let force_single = config.force_single && analysis.services.len() > 1;
 
-    // When force_single is true on a monorepo, check if all services share
-    // the same language. If so, a single unified Dockerfile is emitted.
-    // Otherwise, generate Dockerfile.<name> per service.
-    let all_same_lang = force_single
-        && analysis
-            .services
-            .windows(2)
-            .all(|w| w[0].language == w[1].language);
-
-    // Emit a single root Dockerfile when:
-    // - single service, OR
-    // - force_single with all services sharing the same language.
-    let emit_single_root = is_single_service || (force_single && all_same_lang);
-
     let mut files = Vec::new();
 
     for (idx, service) in analysis.services.iter().enumerate() {
@@ -55,12 +42,14 @@ pub fn generate_dockerfiles(
             format!("failed to render Dockerfile for service '{}'", service.name)
         })?;
 
-        let relative_path = if emit_single_root {
+        let relative_path = if is_single_service {
             "Dockerfile".into()
-        } else if force_single && !all_same_lang {
+        } else if force_single {
+            // force_single always produces distinct named files to prevent
+            // overwrites when multiple services are written to the same root.
             std::path::PathBuf::from(format!("Dockerfile.{}", service.name))
         } else {
-            std::path::PathBuf::from(service.name.clone()).join("Dockerfile")
+            std::path::PathBuf::from(to_slash_path(&Path::new(&service.name).join("Dockerfile")))
         };
 
         files.push(GeneratedFile {
@@ -71,6 +60,16 @@ pub fn generate_dockerfiles(
     }
 
     Ok(files)
+}
+
+// ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a path to a forward-slash string, ensuring cross-platform
+/// consistency in generated Docker-related paths.
+pub fn to_slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn force_single_overrides_monorepo() {
+    fn force_single_mixed_lang_produces_named_files() {
         let svcs = vec![
             make_service("a", Language::Python, Framework::FastApi),
             make_service("b", Language::Rust, Framework::Axum),
@@ -342,7 +341,7 @@ mod tests {
 
         let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
         assert_eq!(files.len(), 2);
-        // Mixed languages with force_single → per-service named files.
+        // force_single always produces distinct named files.
         assert!(files
             .iter()
             .any(|f| f.relative_path == Path::new("Dockerfile.a")));
@@ -352,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn force_single_same_lang_unified() {
+    fn force_single_same_lang_produces_named_files() {
         let svcs = vec![
             make_service("a", Language::Go, Framework::Gin),
             make_service("b", Language::Go, Framework::Echo),
@@ -366,10 +365,13 @@ mod tests {
 
         let files = generate_dockerfiles(&analysis, &config, &tera).unwrap();
         assert_eq!(files.len(), 2);
-        // Same language with force_single → unified root Dockerfile.
+        // force_single always produces distinct named files, even for same lang.
         assert!(files
             .iter()
-            .all(|f| f.relative_path == Path::new("Dockerfile")));
+            .any(|f| f.relative_path == Path::new("Dockerfile.a")));
+        assert!(files
+            .iter()
+            .any(|f| f.relative_path == Path::new("Dockerfile.b")));
     }
 
     #[test]
@@ -488,5 +490,20 @@ mod tests {
         let (file, dir) = framework_entrypoint(&Framework::Remix);
         assert_eq!(file, "index.js");
         assert_eq!(dir, "build/server");
+    }
+
+    #[test]
+    fn to_slash_path_normalizes_separators() {
+        let p = Path::new("frontend").join("Dockerfile");
+        assert_eq!(to_slash_path(&p), "frontend/Dockerfile");
+
+        // On Windows the path would contain backslashes; to_slash_path
+        // normalises them.  On Unix the path is already forward-slash but
+        // the function is still a no-op passthrough.
+        assert_eq!(to_slash_path(Path::new("Dockerfile")), "Dockerfile");
+        assert_eq!(
+            to_slash_path(&PathBuf::from("services").join("api").join("Dockerfile")),
+            "services/api/Dockerfile"
+        );
     }
 }

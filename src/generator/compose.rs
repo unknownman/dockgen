@@ -34,7 +34,9 @@ pub fn generate_docker_compose(
                 if s.is_empty() {
                     ".".into()
                 } else {
-                    s
+                    // Normalise to forward slashes for Docker Compose
+                    // compatibility on all platforms.
+                    s.replace('\\', "/")
                 }
             })
             .unwrap_or_else(|_| ".".into());
