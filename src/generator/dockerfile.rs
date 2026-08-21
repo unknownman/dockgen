@@ -335,6 +335,7 @@ mod tests {
             is_monorepo,
             workspace_tool: None,
             services,
+            detected_infrastructures: vec![],
             warnings: vec![],
         }
     }
@@ -347,6 +348,9 @@ mod tests {
             dry_run: false,
             emit_compose: false,
             output_dir: None,
+            interactive: false,
+            assume_yes: false,
+            interactive_answers: None,
         }
     }
 

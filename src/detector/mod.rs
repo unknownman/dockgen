@@ -122,6 +122,7 @@ pub fn analyze_full_project(
         is_monorepo: structure.is_monorepo,
         workspace_tool: structure.workspace_tool,
         services,
+        detected_infrastructures: vec![],
         warnings,
     })
 }

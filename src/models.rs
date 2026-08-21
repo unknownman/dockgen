@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -243,6 +244,181 @@ impl fmt::Display for BaseImageVariant {
 }
 
 // ---------------------------------------------------------------------------
+// InfraKind
+// ---------------------------------------------------------------------------
+
+/// Type of infrastructure service detected in a project.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ValueEnum,
+)]
+pub enum InfraKind {
+    Postgres,
+    Mysql,
+    Redis,
+    Mongo,
+    RabbitMq,
+    Kafka,
+    Sqlite,
+}
+
+impl fmt::Display for InfraKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InfraKind::Postgres => write!(f, "PostgreSQL"),
+            InfraKind::Mysql => write!(f, "MySQL"),
+            InfraKind::Redis => write!(f, "Redis"),
+            InfraKind::Mongo => write!(f, "MongoDB"),
+            InfraKind::RabbitMq => write!(f, "RabbitMQ"),
+            InfraKind::Kafka => write!(f, "Apache Kafka"),
+            InfraKind::Sqlite => write!(f, "SQLite"),
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl InfraKind {
+    /// Default port for this infrastructure type.
+    pub fn default_port(&self) -> u16 {
+        match self {
+            InfraKind::Postgres => 5432,
+            InfraKind::Mysql => 3306,
+            InfraKind::Redis => 6379,
+            InfraKind::Mongo => 27017,
+            InfraKind::RabbitMq => 5672,
+            InfraKind::Kafka => 9092,
+            InfraKind::Sqlite => 0,
+        }
+    }
+
+    /// Default Docker image tag for this infrastructure type.
+    pub fn default_image(&self) -> &'static str {
+        match self {
+            InfraKind::Postgres => "postgres:16-alpine",
+            InfraKind::Mysql => "mysql:8.0",
+            InfraKind::Redis => "redis:7-alpine",
+            InfraKind::Mongo => "mongo:7",
+            InfraKind::RabbitMq => "rabbitmq:3-management-alpine",
+            InfraKind::Kafka => "confluentinc/cp-kafka:latest",
+            InfraKind::Sqlite => "alpine:3.20",
+        }
+    }
+
+    /// Default environment variables for this infrastructure type.
+    ///
+    /// Returns `(key, value)` pairs with sensible non-secret defaults.
+    pub fn default_env(&self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            InfraKind::Postgres => vec![
+                ("POSTGRES_USER", "app"),
+                ("POSTGRES_PASSWORD", "postgres"),
+                ("POSTGRES_DB", "app"),
+            ],
+            InfraKind::Mysql => vec![
+                ("MYSQL_ROOT_PASSWORD", "root"),
+                ("MYSQL_DATABASE", "app"),
+                ("MYSQL_USER", "app"),
+                ("MYSQL_PASSWORD", "app"),
+            ],
+            InfraKind::Redis => vec![],
+            InfraKind::Mongo => vec![
+                ("MONGO_INITDB_ROOT_USERNAME", "app"),
+                ("MONGO_INITDB_ROOT_PASSWORD", "app"),
+            ],
+            InfraKind::RabbitMq => vec![
+                ("RABBITMQ_DEFAULT_USER", "guest"),
+                ("RABBITMQ_DEFAULT_PASS", "guest"),
+            ],
+            InfraKind::Kafka => vec![],
+            InfraKind::Sqlite => vec![],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InfraSource
+// ---------------------------------------------------------------------------
+
+/// How an infrastructure dependency was detected.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum InfraSource {
+    /// Detected via an environment variable (e.g. `DATABASE_URL`).
+    EnvVar(String),
+    /// Detected via a manifest dependency (e.g. `pg` in `package.json`).
+    ManifestDependency(String),
+    /// Detected via a configuration file (e.g. `prisma/schema.prisma`).
+    ConfigFile(String),
+    /// Detected via a Prisma schema with an explicit datasource provider.
+    PrismaSchema,
+    /// User explicitly provided via CLI flag or interactive prompt.
+    ManualOverride,
+}
+
+impl fmt::Display for InfraSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InfraSource::EnvVar(var) => write!(f, "env var `{var}`"),
+            InfraSource::ManifestDependency(dep) => write!(f, "dependency `{dep}`"),
+            InfraSource::ConfigFile(path) => write!(f, "config file `{path}`"),
+            InfraSource::PrismaSchema => write!(f, "Prisma schema"),
+            InfraSource::ManualOverride => write!(f, "manual override"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// InfraService
+// ---------------------------------------------------------------------------
+
+/// A detected or configured infrastructure service to include in
+/// `docker-compose.yml`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InfraService {
+    /// The type of infrastructure (Postgres, Redis, etc.).
+    pub kind: InfraKind,
+
+    /// Compose service name (e.g. `"postgres"`, `"redis"`).
+    pub name: String,
+
+    /// Docker image to use (e.g. `"postgres:16-alpine"`).
+    pub image: String,
+
+    /// Exposed port on the host.
+    pub port: u16,
+
+    /// Environment variables as `(key, value)` pairs, sorted by key.
+    pub env_vars: Vec<(String, String)>,
+
+    /// Whether this service should be included in the generated compose file.
+    pub is_attached_to_compose: bool,
+
+    /// How this infrastructure dependency was detected.
+    pub source: InfraSource,
+}
+
+// ---------------------------------------------------------------------------
+// InteractiveAnswers
+// ---------------------------------------------------------------------------
+
+/// Answers collected from the Phase 2 interactive Q&A wizard.
+///
+/// All fields are optional or default so that non-interactive mode (`-y` /
+/// `--json`) can skip the wizard entirely while still producing valid output.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractiveAnswers {
+    /// Which infrastructure kinds the user wants included in compose.
+    pub include_infra_in_compose: Vec<InfraKind>,
+
+    /// Whether Prisma migrations should run on startup.
+    pub run_prisma_migrations: Option<bool>,
+
+    /// Whether a Laravel queue worker service should be generated.
+    pub create_queue_worker: Option<bool>,
+
+    /// User-specified port overrides keyed by compose service name.
+    pub custom_service_ports: BTreeMap<String, u16>,
+}
+
+// ---------------------------------------------------------------------------
 // ServiceType
 // ---------------------------------------------------------------------------
 
@@ -341,6 +517,10 @@ pub struct ProjectAnalysis {
     /// All detected services, sorted by name for deterministic output.
     pub services: Vec<Service>,
 
+    /// Infrastructure services detected in the project (env vars, manifests,
+    /// config files), sorted by kind for deterministic output.
+    pub detected_infrastructures: Vec<InfraService>,
+
     /// Non-fatal warnings encountered during analysis.
     pub warnings: Vec<String>,
 }
@@ -369,6 +549,15 @@ pub struct GenerationConfig {
 
     /// Output directory override. Defaults to each service's root path.
     pub output_dir: Option<PathBuf>,
+
+    /// Enable the Phase 2 interactive Q&A wizard.
+    pub interactive: bool,
+
+    /// Accept all interactive defaults without prompting (implies `--yes`).
+    pub assume_yes: bool,
+
+    /// User answers from the interactive wizard, if any.
+    pub interactive_answers: Option<InteractiveAnswers>,
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +648,7 @@ mod tests {
             is_monorepo: true,
             workspace_tool: Some("turborepo".into()),
             services: vec![],
+            detected_infrastructures: vec![],
             warnings: vec!["No lockfile found".into()],
         };
 
@@ -489,10 +679,164 @@ mod tests {
             dry_run: false,
             emit_compose: false,
             output_dir: None,
+            interactive: false,
+            assume_yes: false,
+            interactive_answers: None,
         };
 
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: GenerationConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, deserialized);
+    }
+
+    #[test]
+    fn infra_kind_display() {
+        assert_eq!(InfraKind::Postgres.to_string(), "PostgreSQL");
+        assert_eq!(InfraKind::Mysql.to_string(), "MySQL");
+        assert_eq!(InfraKind::Redis.to_string(), "Redis");
+        assert_eq!(InfraKind::Mongo.to_string(), "MongoDB");
+        assert_eq!(InfraKind::RabbitMq.to_string(), "RabbitMQ");
+        assert_eq!(InfraKind::Kafka.to_string(), "Apache Kafka");
+        assert_eq!(InfraKind::Sqlite.to_string(), "SQLite");
+    }
+
+    #[test]
+    fn infra_kind_default_port() {
+        assert_eq!(InfraKind::Postgres.default_port(), 5432);
+        assert_eq!(InfraKind::Mysql.default_port(), 3306);
+        assert_eq!(InfraKind::Redis.default_port(), 6379);
+        assert_eq!(InfraKind::Mongo.default_port(), 27017);
+        assert_eq!(InfraKind::RabbitMq.default_port(), 5672);
+        assert_eq!(InfraKind::Kafka.default_port(), 9092);
+        assert_eq!(InfraKind::Sqlite.default_port(), 0);
+    }
+
+    #[test]
+    fn infra_kind_default_image() {
+        assert_eq!(InfraKind::Postgres.default_image(), "postgres:16-alpine");
+        assert_eq!(InfraKind::Mysql.default_image(), "mysql:8.0");
+        assert_eq!(InfraKind::Redis.default_image(), "redis:7-alpine");
+        assert_eq!(InfraKind::Mongo.default_image(), "mongo:7");
+        assert_eq!(
+            InfraKind::RabbitMq.default_image(),
+            "rabbitmq:3-management-alpine"
+        );
+        assert_eq!(
+            InfraKind::Kafka.default_image(),
+            "confluentinc/cp-kafka:latest"
+        );
+        assert_eq!(InfraKind::Sqlite.default_image(), "alpine:3.20");
+    }
+
+    #[test]
+    fn infra_kind_default_env() {
+        let pg_env = InfraKind::Postgres.default_env();
+        assert!(pg_env.iter().any(|(k, _)| *k == "POSTGRES_USER"));
+        assert!(pg_env
+            .iter()
+            .any(|(k, v)| *k == "POSTGRES_DB" && *v == "app"));
+
+        let mysql_env = InfraKind::Mysql.default_env();
+        assert!(mysql_env.iter().any(|(k, _)| *k == "MYSQL_ROOT_PASSWORD"));
+
+        // Redis and Kafka have no default env vars.
+        assert!(InfraKind::Redis.default_env().is_empty());
+        assert!(InfraKind::Kafka.default_env().is_empty());
+    }
+
+    #[test]
+    fn infra_kind_ordering() {
+        // InfraKind derives Ord — sorted by variant declaration order:
+        // Postgres(0), Mysql(1), Redis(2), Mongo(3), RabbitMq(4), Kafka(5), Sqlite(6)
+        let mut kinds = vec![InfraKind::Redis, InfraKind::Postgres, InfraKind::Mysql];
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            vec![InfraKind::Postgres, InfraKind::Mysql, InfraKind::Redis]
+        );
+    }
+
+    #[test]
+    fn infra_source_display() {
+        assert_eq!(
+            InfraSource::EnvVar("DATABASE_URL".into()).to_string(),
+            "env var `DATABASE_URL`"
+        );
+        assert_eq!(
+            InfraSource::ManifestDependency("pg".into()).to_string(),
+            "dependency `pg`"
+        );
+        assert_eq!(
+            InfraSource::ConfigFile("prisma/schema.prisma".into()).to_string(),
+            "config file `prisma/schema.prisma`"
+        );
+        assert_eq!(InfraSource::PrismaSchema.to_string(), "Prisma schema");
+        assert_eq!(InfraSource::ManualOverride.to_string(), "manual override");
+    }
+
+    #[test]
+    fn infra_source_ordering() {
+        // InfraSource derives Ord — sorted by variant declaration order:
+        // EnvVar(0), ManifestDependency(1), ConfigFile(2), PrismaSchema(3), ManualOverride(4)
+        let mut sources = vec![
+            InfraSource::ManualOverride,
+            InfraSource::EnvVar("A".into()),
+            InfraSource::PrismaSchema,
+        ];
+        sources.sort();
+        assert_eq!(
+            sources,
+            vec![
+                InfraSource::EnvVar("A".into()),
+                InfraSource::PrismaSchema,
+                InfraSource::ManualOverride,
+            ]
+        );
+    }
+
+    #[test]
+    fn infra_service_serde_roundtrip() {
+        let svc = InfraService {
+            kind: InfraKind::Postgres,
+            name: "postgres".into(),
+            image: "postgres:16-alpine".into(),
+            port: 5432,
+            env_vars: vec![
+                ("POSTGRES_DB".into(), "app".into()),
+                ("POSTGRES_PASSWORD".into(), "postgres".into()),
+            ],
+            is_attached_to_compose: true,
+            source: InfraSource::EnvVar("DATABASE_URL".into()),
+        };
+
+        let json = serde_json::to_string(&svc).unwrap();
+        let deserialized: InfraService = serde_json::from_str(&json).unwrap();
+        assert_eq!(svc, deserialized);
+    }
+
+    #[test]
+    fn interactive_answers_default() {
+        let answers = InteractiveAnswers::default();
+        assert!(answers.include_infra_in_compose.is_empty());
+        assert!(answers.run_prisma_migrations.is_none());
+        assert!(answers.create_queue_worker.is_none());
+        assert!(answers.custom_service_ports.is_empty());
+    }
+
+    #[test]
+    fn interactive_answers_serde_roundtrip() {
+        let answers = InteractiveAnswers {
+            include_infra_in_compose: vec![InfraKind::Postgres, InfraKind::Redis],
+            run_prisma_migrations: Some(true),
+            create_queue_worker: Some(false),
+            custom_service_ports: BTreeMap::from([
+                ("postgres".into(), 5433),
+                ("redis".into(), 6380),
+            ]),
+        };
+
+        let json = serde_json::to_string(&answers).unwrap();
+        let deserialized: InteractiveAnswers = serde_json::from_str(&json).unwrap();
+        assert_eq!(answers, deserialized);
     }
 }

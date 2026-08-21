@@ -146,6 +146,7 @@ mod tests {
             is_monorepo: true,
             workspace_tool: Some("turborepo".into()),
             services,
+            detected_infrastructures: vec![],
             warnings: vec![],
         }
     }
@@ -176,6 +177,9 @@ mod tests {
             dry_run: false,
             emit_compose: false,
             output_dir: None,
+            interactive: false,
+            assume_yes: false,
+            interactive_answers: None,
         }
     }
 

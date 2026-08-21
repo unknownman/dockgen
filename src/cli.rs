@@ -85,6 +85,14 @@ pub struct Cli {
     /// Suppress all terminal logs except errors and outputs.
     #[arg(short = 'q', long = "quiet")]
     pub quiet: bool,
+
+    /// Enable the Phase 2 interactive Q&A wizard for context-driven prompts.
+    #[arg(short = 'i', long = "interactive")]
+    pub interactive: bool,
+
+    /// Accept all interactive defaults without prompting.
+    #[arg(short = 'y', long = "yes")]
+    pub yes: bool,
 }
 
 impl Cli {
@@ -97,6 +105,9 @@ impl Cli {
             dry_run: self.dry_run,
             emit_compose: self.compose,
             output_dir: self.output_dir.clone(),
+            interactive: self.interactive,
+            assume_yes: self.yes,
+            interactive_answers: None,
         }
     }
 
@@ -279,6 +290,9 @@ mod tests {
                 dry_run: false,
                 emit_compose: false,
                 output_dir: None,
+                interactive: false,
+                assume_yes: false,
+                interactive_answers: None,
             }
         );
     }
