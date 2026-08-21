@@ -49,7 +49,7 @@ RUN apk add --no-cache libpq && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
 {% endif %}
 
-COPY --from=builder /usr/local/lib/python{{ img_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages /usr/local/lib/python{{ img_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages
+COPY --from=builder /usr/local/lib/python{{ py_short_version }}/site-packages /usr/local/lib/python{{ py_short_version }}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
@@ -58,6 +58,10 @@ EXPOSE {{ port | default(value=8000) }}
 
 {% if start_command -%}
 CMD ["sh", "-c", "{{ start_command }}"]
+{% elif framework == "flask" -%}
+CMD ["flask", "run", "--host", "0.0.0.0", "--port", "{{ port | default(value=8000) }}"]
+{% elif framework == "django" -%}
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:{{ port | default(value=8000) }}", "--workers", "4"]
 {% else -%}
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{{ port | default(value=8000) }}"]
 {% endif -%}

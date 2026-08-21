@@ -368,6 +368,7 @@ mod tests {
         ctx.insert("runtime_version", &"3.12");
         ctx.insert("base_image_variant", &"alpine");
         ctx.insert("has_frontend_assets", &false);
+        ctx.insert("py_short_version", &"3.12");
         let output = tera_render("dockerfile/python/fastapi.tera", &ctx);
         assert!(output.contains("FROM python:3.12-alpine AS builder"));
         assert!(output.contains("USER appuser"));
@@ -382,6 +383,7 @@ mod tests {
         ctx.insert("runtime_version", &"3.12");
         ctx.insert("base_image_variant", &"slim");
         ctx.insert("has_frontend_assets", &false);
+        ctx.insert("py_short_version", &"3.12");
         let output = tera_render("dockerfile/python/fastapi.tera", &ctx);
         assert!(output.contains("FROM python:3.12-slim AS builder"));
         assert!(output.contains("USER appuser"));

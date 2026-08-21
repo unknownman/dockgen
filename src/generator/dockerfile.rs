@@ -144,6 +144,22 @@ fn build_dockerfile_context(
     };
     ctx.insert("node_pm", &node_pm.to_string());
 
+    // Binary / assembly name — preferred order: package_name → entrypoint → name.
+    let bin_name = resolve_bin_name(service);
+    ctx.insert("bin_name", &bin_name);
+
+    // Assembly name for .NET templates (same resolution logic).
+    ctx.insert("assembly_name", &bin_name);
+
+    // Python short version (e.g. "3.11" from "3.11.9") — computed in Rust
+    // so templates never need fragile Tera split/slice chains.
+    let py_short_version = compute_python_short_version(version);
+    ctx.insert("py_short_version", &py_short_version);
+
+    // Node.js package manager run prefix for build/start commands.
+    let pm_run_prefix = compute_pm_run_prefix(&service.package_manager);
+    ctx.insert("pm_run_prefix", &pm_run_prefix);
+
     // Framework-specific entrypoint and start configuration.
     let (entrypoint_file, entrypoint_dir) = framework_entrypoint(&service.framework);
     ctx.insert("entrypoint_file", &entrypoint_file);
@@ -163,9 +179,6 @@ fn build_dockerfile_context(
         })
         .collect();
     ctx.insert("env_vars", &env_map);
-
-    // Assembly name for .NET templates.
-    ctx.insert("assembly_name", &service.name);
 
     ctx
 }
@@ -242,6 +255,50 @@ fn default_runtime_version(lang: &Language) -> String {
     }
 }
 
+/// Resolve the binary / assembly name for a service.
+///
+/// Preferred order: `package_name` → `entrypoint` (stem) → `name`.
+fn resolve_bin_name(service: &Service) -> String {
+    if let Some(ref pkg) = service.package_name {
+        return pkg.clone();
+    }
+    if let Some(ref ep) = service.entrypoint {
+        // Strip path and extension to get the stem (e.g. "cmd/server" → "server").
+        let stem = std::path::Path::new(ep)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(ep);
+        return stem.to_string();
+    }
+    service.name.clone()
+}
+
+/// Compute a two-component Python version string suitable for site-packages paths.
+///
+/// `compute_python_short_version("3.11.9")` → `"3.11"`
+/// `compute_python_short_version("3.11")`   → `"3.11"`
+fn compute_python_short_version(version: &str) -> String {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() >= 2 {
+        format!("{}.{}", parts[0], parts[1])
+    } else {
+        version.to_string()
+    }
+}
+
+/// Compute the package-manager run prefix for Node.js services.
+///
+/// Used in templates like `{{ pm_run_prefix }} build` to produce
+/// `npm run build`, `pnpm build`, `yarn build`, or `bun run build`.
+fn compute_pm_run_prefix(pm: &PackageManager) -> &'static str {
+    match pm {
+        PackageManager::Pnpm => "pnpm",
+        PackageManager::Yarn => "yarn",
+        PackageManager::Bun => "bun run",
+        _ => "npm run",
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -257,6 +314,7 @@ mod tests {
         Service {
             name: name.into(),
             path: PathBuf::from(format!("/project/{name}")),
+            package_name: None,
             language: lang,
             framework: fw,
             package_manager: PackageManager::Unknown,

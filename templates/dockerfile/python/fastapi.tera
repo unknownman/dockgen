@@ -51,7 +51,7 @@ RUN apk add --no-cache libpq && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
 {% endif %}
 
-COPY --from=builder /usr/local/lib/python{{ img_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages /usr/local/lib/python{{ img_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages
+COPY --from=builder /usr/local/lib/python{{ py_short_version }}/site-packages /usr/local/lib/python{{ py_short_version }}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 

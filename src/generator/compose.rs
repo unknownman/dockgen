@@ -21,6 +21,9 @@ pub fn generate_docker_compose(
         anyhow::bail!("no services to generate docker-compose.yml for");
     }
 
+    let is_single_service = !analysis.is_monorepo || analysis.services.len() == 1;
+    let force_single = config.force_single && analysis.services.len() > 1;
+
     let mut svc_entries = Vec::new();
 
     for (idx, service) in analysis.services.iter().enumerate() {
@@ -41,6 +44,15 @@ pub fn generate_docker_compose(
             })
             .unwrap_or_else(|_| ".".into());
 
+        // Compute the dockerfile path so docker-compose can locate it.
+        let dockerfile_path = if is_single_service {
+            "Dockerfile".into()
+        } else if force_single {
+            format!("Dockerfile.{}", service.name)
+        } else {
+            "Dockerfile".into()
+        };
+
         let port = config
             .port_overrides
             .get(idx)
@@ -57,6 +69,7 @@ pub fn generate_docker_compose(
         svc_entries.push(serde_json::json!({
             "name": slug,
             "relative_path": relative_path,
+            "dockerfile_path": dockerfile_path,
             "ports": vec![port],
             "environment": env,
         }));
@@ -112,6 +125,7 @@ mod tests {
         Service {
             name: name.into(),
             path: PathBuf::from(format!("/project/{name}")),
+            package_name: None,
             language: lang,
             framework: fw,
             package_manager: PackageManager::Unknown,

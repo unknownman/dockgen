@@ -277,11 +277,16 @@ impl fmt::Display for ServiceType {
 /// A single deployable unit detected within the project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Service {
-    /// Human-readable name (typically the directory or package name).
+    /// Human-readable name (typically the directory name).
     pub name: String,
 
     /// Absolute path to the service root on disk.
     pub path: PathBuf,
+
+    /// Package / binary name extracted from manifests (e.g. from `Cargo.toml`
+    /// `[package] name`, `package.json` `"name"`, `<artifactId>`, etc.).
+    /// Falls back to `None` when no manifest is available.
+    pub package_name: Option<String>,
 
     /// Primary programming language.
     pub language: Language,
@@ -428,6 +433,7 @@ mod tests {
         let svc = Service {
             name: "api".into(),
             path: PathBuf::from("/project/services/api"),
+            package_name: Some("my-api".into()),
             language: Language::Rust,
             framework: Framework::Axum,
             package_manager: PackageManager::Cargo,

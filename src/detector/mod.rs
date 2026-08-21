@@ -97,6 +97,7 @@ pub fn analyze_full_project(
         let svc = Service {
             name: candidate.name.clone(),
             path: candidate.full_path.clone(),
+            package_name: manifest.package_name.clone(),
             language,
             framework,
             package_manager,

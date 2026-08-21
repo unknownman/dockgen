@@ -4,7 +4,7 @@ services:
   {{ service.name }}:
     build:
       context: {{ service.relative_path | default(value=".") }}
-      dockerfile: Dockerfile
+      dockerfile: {{ service.dockerfile_path | default(value="Dockerfile") }}
     ports:
 {% for port in service.ports %}
       - "{{ port }}:{{ port }}"

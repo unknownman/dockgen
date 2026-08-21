@@ -133,6 +133,7 @@ mod tests {
         Service {
             name: name.into(),
             path: PathBuf::from(format!("/project/{name}")),
+            package_name: None,
             language: lang,
             framework: Framework::Generic,
             package_manager: PackageManager::Unknown,

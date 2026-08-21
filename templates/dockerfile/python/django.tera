@@ -1,7 +1,6 @@
-{% set raw_version = runtime_version | default(value="3.11") %}
-{% set py_short = raw_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") %}
+{% set img_version = runtime_version | default(value="3.11") %}
 # === Stage 1: Build dependencies ===
-FROM python:{{ raw_version }}-slim AS builder
+FROM python:{{ img_version }}-slim AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -26,7 +25,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     fi
 
 # === Stage 2: Production runner ===
-FROM python:{{ raw_version }}-slim AS runner
+FROM python:{{ img_version }}-slim AS runner
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -38,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
 
-COPY --from=builder /usr/local/lib/python{{ py_short }}/site-packages /usr/local/lib/python{{ py_short }}/site-packages
+COPY --from=builder /usr/local/lib/python{{ py_short_version }}/site-packages /usr/local/lib/python{{ py_short_version }}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
