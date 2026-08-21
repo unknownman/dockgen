@@ -26,7 +26,6 @@ pub fn extract_version(dir_path: &Path, language: &Language) -> Option<String> {
 ///
 /// Priority: `.env` > `.env.local` > `.env.development` > `.env.staging`
 /// > `.env.production` > `.env.example`.
-#[allow(dead_code)]
 pub fn analyze_env_files(dir_path: &Path) -> BTreeMap<String, String> {
     env::parse_env_files(dir_path)
 }

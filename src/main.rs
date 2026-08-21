@@ -2,6 +2,7 @@ mod analyzer;
 mod cli;
 mod detector;
 mod generator;
+mod interactive;
 mod models;
 mod templates;
 
@@ -66,7 +67,17 @@ fn run() -> anyhow::Result<()> {
 
     // --- Step 4: JSON output mode ---
     if cli.json {
-        let config = cli.to_generation_config();
+        let mut config = cli.to_generation_config();
+        // Non-interactive defaults for JSON mode.
+        if analysis
+            .detected_infrastructures
+            .iter()
+            .any(|i| i.is_attached_to_compose)
+        {
+            config.emit_compose = true;
+        }
+        let answers = interactive::run_interactive_wizard(&analysis, &mut config)?;
+        config.interactive_answers = Some(answers);
         let files = generator::generate_all_files(&analysis, &config)?;
 
         let output = serde_json::json!({
@@ -89,7 +100,14 @@ fn run() -> anyhow::Result<()> {
     }
 
     // --- Step 6: Code generation & safe write ---
-    let config = cli.to_generation_config();
+    let mut config = cli.to_generation_config();
+
+    // --- Step 6a: Interactive wizard (Phase 2) ---
+    if config.interactive || config.assume_yes {
+        let answers = interactive::run_interactive_wizard(&analysis, &mut config)?;
+        config.interactive_answers = Some(answers);
+    }
+
     let files = generator::generate_all_files(&analysis, &config)?;
 
     let output_dir = cli.output_dir.as_deref().unwrap_or(&target_path);

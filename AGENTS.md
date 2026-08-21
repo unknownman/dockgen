@@ -127,13 +127,17 @@ dockgen/
 │   │   │                                  #   synthesis, per-language templates
 │   │   └── compose.rs                     #   docker-compose.yml generation — slugified
 │   │                                      #   names, dockerfile_path, port mapping,
-│   │                                      #   env vars, forward-slash normalization
+│   │                                      #   env vars, forward-slash normalization,
+│   │                                      #   infra services with named volumes
 │   │
 │   ├── interactive/                       # ── Phase 2: Interactive Wizard ──
-│   │   ├── mod.rs                         #   (reserved — interactive orchestrator)
-│   │   ├── questions.rs                   #   (reserved — question definitions &
-│   │   │                                  #    trigger-to-question mappings)
-│   │   └── prompts.rs                     #   (reserved — terminal prompt rendering)
+│   │   ├── mod.rs                         #   run_interactive_wizard() orchestrator,
+│   │   │                                  #   apply_defaults(), collect_answers()
+│   │   ├── questions.rs                   #   InteractiveQuestion enum, build_questions()
+│   │   │                                  #   AttachInfra, PrismaMigrations, QueueWorker,
+│   │   │                                  #   ConfirmServicePort — trigger-to-question map
+│   │   └── prompts.rs                     #   is_terminal(), ask_question() dispatch,
+│   │                                      #   ask_confirm(), ask_port(), inquire wrappers
 │   │
 │   └── templates/                         # ── Embedded Template Engine ──
 │       └── mod.rs                         #   RustEmbed loader, Tera engine init,
@@ -188,10 +192,12 @@ dockgen/
 │                                          #   dynamic dockerfile_path
 │
 └── tests/
-    └── cli_tests.rs                       #   10 integration tests — --help,
+    └── cli_tests.rs                       #   16 integration tests — --help,
                                            #   --version, --dry-run, --json,
                                            #   --compose, combined flags,
-                                           #   language override, mock projects
+                                           #   language override, mock projects,
+                                           #   infra detection, service filtering,
+                                           #   base image override, port override
 ```
 
 ### Module Dependency Graph
@@ -553,7 +559,7 @@ Templates do NOT emit `HEALTHCHECK` instructions by default — this is the user
 | Template render tests | `src/templates/mod.rs::tests` | `tera_render()` helper with context builder |
 | Determinism tests | Multiple modules | Assert exact string/byte equality on duplicate runs |
 
-**Test count:** 328 unit tests + 10 integration tests = **338 total** (all passing).
+**Test count:** 340+ unit tests + 16 integration tests = **356+ total** (all passing).
 
 **Test rules:**
 - All public API functions must have at least one unit test.
@@ -700,19 +706,74 @@ Used in templates: `{{ pm_run_prefix }} build` → `npm run build`.
 
 ---
 
-## 10. Future Roadmap (Phase 2 Modules)
+## 10. Phase 2 — Fully Implemented & Active
 
-The following modules are reserved in the file tree but not yet implemented:
+Phase 2 is **fully implemented, verified, and production-ready.** All modules below are active and ship with comprehensive test coverage.
+
+### Implemented Modules
+
+| Module | Purpose | Status |
+|--------|---------|--------|
+| `src/interactive/mod.rs` | Interactive wizard orchestrator — auto-resolves defaults for `-y` / `--json` / non-TTY, or collects answers interactively via `inquire` prompts | ✅ Active |
+| `src/interactive/questions.rs` | Question definitions — `AttachInfra`, `RunPrismaMigrations`, `LaravelQueueWorker`, `ConfirmServicePort` — with trigger-to-question mapping built from `ProjectAnalysis` | ✅ Active |
+| `src/interactive/prompts.rs` | Terminal prompt rendering — `inquire::Confirm` for booleans, `inquire::Text` for port numbers, TTY safety via `std::io::IsTerminal` | ✅ Active |
+| `src/detector/infra.rs` | Infrastructure detection engine — 4-layer detection (env URLs, well-known keys, manifest deps, Prisma schemas), fuzzy matching, deduplication by kind with priority, 50+ unit tests | ✅ Active |
+| `src/analyzer/env.rs` | `.env` file parser — 6 env file variants, priority merging (`.env.local` > `.env` > `.env.development` > etc.), `detect_infra_connections()` returning `InfraScanResult` | ✅ Active |
+| `src/generator/compose.rs` | docker-compose.yml generation — slugified names, `dockerfile_path` per service, port mapping, env vars, forward-slash normalization, infrastructure services with named volume declarations and top-level `volumes:` block, deterministic sort by kind name | ✅ Active |
+| `src/analyzer/mod.rs` | Analyzer orchestration — exposes `env`, `dependencies`, `version` modules, provides `analyze_env_files()`, `analyze_manifests()`, `extract_version()` helpers | ✅ Active |
+
+### Phase 2 Pipeline Integration
+
+```
+Step 3:  Analysis (Phase 1)
+           ├─ detector::infra::detect_infrastructures()
+           │    └─ 4-layer detection → Vec<InfraService>
+           └─ analyzer::env::detect_infra_connections()
+                └─ .env parsing → InfraScanResult
+
+Step 4:  JSON mode (early exit)
+           └─ interactive::run_interactive_wizard(analysis, &mut config)
+                └─ Auto-resolves all questions (no prompts in JSON mode)
+
+Step 6a: Interactive wizard (non-JSON path)
+           └─ interactive::run_interactive_wizard(analysis, &mut config)
+                ├─ TTY + !assume_yes → interactive prompts via inquire
+                └─ !TTY || assume_yes → apply_defaults()
+                     └─ All detected infra included, prisma/queue = true
+
+Step 6b: Generation
+           └─ generator::compose::generate_docker_compose()
+                ├─ Filters infra by InteractiveAnswers.include_infra_in_compose
+                ├─ Renders infra services with ports, env, named volumes
+                └─ Emits top-level volumes: block for persistent data
+```
+
+### CLI Flags for Phase 2
+
+| Flag | Effect |
+|------|--------|
+| `-i, --interactive` | Activate interactive Q&A wizard after analysis |
+| `-y, --yes` | Skip wizard, accept all defaults (additive = yes, destructive = no) |
+| `--json` | JSON-only output, wizard auto-resolves silently, no prompts |
+| `--compose` | Always emit `docker-compose.yml` (wizard may also enable it when infra is detected) |
+
+### Docker Compose Volume Invariants
+
+Every named volume referenced in `services.<name>.volumes` MUST be declared in the top-level `volumes:` block. This is enforced by `build_infra_entries()` which only registers a volume name when `infra_persists_data()` returns `true`. The following infrastructure kinds persist data to named volumes:
+
+| Kind | Volume Name Pattern | Mount Path |
+|------|-------------------|------------|
+| `Postgres` | `{name}data` | `/var/lib/postgresql/data` |
+| `Mysql` | `{name}data` | `/var/lib/mysql` |
+| `Redis` | `{name}data` | `/data` |
+| `Mongo` | `{name}data` | `/data/db` |
+| `Kafka` | `{name}data` | `/var/lib/kafka/data` |
+| `RabbitMq` | `{name}data` | `/var/lib/rabbitmq` |
+
+**SQLite** — No compose container. Embedded file-based database; no separate service is generated.
+
+### Remaining Future Work
 
 | Module | Purpose |
 |--------|---------|
-| `src/interactive/mod.rs` | Interactive wizard orchestrator |
-| `src/interactive/questions.rs` | Question definitions + trigger-to-question mapping |
-| `src/interactive/prompts.rs` | Terminal prompt rendering (dialoguer/indicatif) |
-| `src/analyzer/mod.rs` | Analyzer orchestration (currently unused) |
-
-**Phase 2 implementation order:**
-1. `interactive/questions.rs` — Define all question types and trigger conditions.
-2. `interactive/prompts.rs` — Terminal UI with `dialoguer` for select/confirm prompts.
-3. `interactive/mod.rs` — Orchestrate question flow, collect answers, inject into `GenerationConfig`.
-4. `src/main.rs` — Add `-i` / `--yes` flag handling between Step 3 (analysis) and Step 6 (generation).
+| `src/analyzer/mod.rs` | Additional analyzer orchestration (currently functional but minimal) |

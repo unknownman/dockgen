@@ -142,7 +142,7 @@ fn build_dockerfile_context(
         PackageManager::Bun => "bun",
         _ => "npm",
     };
-    ctx.insert("node_pm", &node_pm.to_string());
+    ctx.insert("node_pm", node_pm);
 
     // Binary / assembly name — preferred order: package_name → entrypoint → name.
     let bin_name = resolve_bin_name(service);
