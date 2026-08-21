@@ -30,7 +30,7 @@ COPY . .
 {% if build_command -%}
 RUN {{ build_command }}
 {% else -%}
-RUN if [ -f tsconfig.json ]; then npm run build; fi
+RUN npm run build
 {% endif -%}
 
 # === Stage 3: Production runner ===
@@ -43,17 +43,13 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
-{% if entrypoint_dir and entrypoint_dir != "." -%}
-COPY --from=builder /app/{{ entrypoint_dir }} ./{{ entrypoint_dir }}
-{% endif -%}
+COPY --from=builder /app/dist ./dist
 
 USER appuser
-EXPOSE {{ port | default(value=3000) }}
+EXPOSE {{ port | default(value=4321) }}
 
 {% if start_command -%}
 CMD ["sh", "-c", "{{ start_command }}"]
-{% elif entrypoint_dir and entrypoint_dir != "." -%}
-CMD ["node", "{{ entrypoint_dir }}/{{ entrypoint_file }}"]
 {% else -%}
-CMD ["node", "{{ entrypoint_file }}"]
+CMD ["node", "./dist/server/entry.mjs"]
 {% endif -%}

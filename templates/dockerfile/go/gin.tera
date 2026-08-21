@@ -1,0 +1,31 @@
+{% set img_version = runtime_version | default(value="1.22") %}
+{% set runner_tag = "alpine:3.20" %}
+# === Stage 1: Build the binary ===
+FROM golang:{{ img_version }}-alpine AS builder
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates git
+
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/server .
+
+# === Stage 2: Minimal runtime ===
+FROM {{ runner_tag }} AS runner
+RUN apk add --no-cache ca-certificates && \
+    addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+
+WORKDIR /app
+COPY --from=builder --chown=appuser:appgroup /app/server .
+
+USER appuser
+EXPOSE {{ port | default(value=8080) }}
+
+{% if start_command -%}
+CMD ["sh", "-c", "{{ start_command }}"]
+{% else -%}
+CMD ["./server"]
+{% endif -%}

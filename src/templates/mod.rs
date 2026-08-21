@@ -53,6 +53,9 @@ pub fn resolve_dockerfile_template(language: &Language, framework: &Framework) -
             Framework::NextJs => "dockerfile/node/nextjs.tera",
             Framework::Nuxt => "dockerfile/node/nuxt.tera",
             Framework::NestJs => "dockerfile/node/nestjs.tera",
+            Framework::SvelteKit => "dockerfile/node/sveltekit.tera",
+            Framework::Remix => "dockerfile/node/remix.tera",
+            Framework::Astro => "dockerfile/node/astro.tera",
             _ => "dockerfile/node/generic.tera",
         },
         Language::Python => match framework {
@@ -60,8 +63,14 @@ pub fn resolve_dockerfile_template(language: &Language, framework: &Framework) -
             Framework::Django => "dockerfile/python/django.tera",
             _ => "dockerfile/python/generic.tera",
         },
-        Language::Go => "dockerfile/go/generic.tera",
-        Language::Rust => "dockerfile/rust/generic.tera",
+        Language::Go => match framework {
+            Framework::Gin => "dockerfile/go/gin.tera",
+            _ => "dockerfile/go/generic.tera",
+        },
+        Language::Rust => match framework {
+            Framework::Axum => "dockerfile/rust/axum.tera",
+            _ => "dockerfile/rust/generic.tera",
+        },
         Language::Java => "dockerfile/java/springboot.tera",
         Language::Php => match framework {
             Framework::Laravel => "dockerfile/php/laravel.tera",
@@ -154,11 +163,11 @@ mod tests {
             (Framework::NextJs, "dockerfile/node/nextjs.tera"),
             (Framework::Nuxt, "dockerfile/node/nuxt.tera"),
             (Framework::NestJs, "dockerfile/node/nestjs.tera"),
+            (Framework::SvelteKit, "dockerfile/node/sveltekit.tera"),
+            (Framework::Remix, "dockerfile/node/remix.tera"),
+            (Framework::Astro, "dockerfile/node/astro.tera"),
             (Framework::Express, "dockerfile/node/generic.tera"),
             (Framework::Fastify, "dockerfile/node/generic.tera"),
-            (Framework::Remix, "dockerfile/node/generic.tera"),
-            (Framework::SvelteKit, "dockerfile/node/generic.tera"),
-            (Framework::Astro, "dockerfile/node/generic.tera"),
             (Framework::NodeGeneric, "dockerfile/node/generic.tera"),
         ]
     }
@@ -198,8 +207,11 @@ mod tests {
 
     #[test]
     fn dockerfile_go() {
+        assert_eq!(
+            resolve_dockerfile_template(&Language::Go, &Framework::Gin),
+            "dockerfile/go/gin.tera"
+        );
         for fw in [
-            Framework::Gin,
             Framework::Echo,
             Framework::Fiber,
             Framework::Chi,
@@ -215,8 +227,11 @@ mod tests {
 
     #[test]
     fn dockerfile_rust() {
+        assert_eq!(
+            resolve_dockerfile_template(&Language::Rust, &Framework::Axum),
+            "dockerfile/rust/axum.tera"
+        );
         for fw in [
-            Framework::Axum,
             Framework::ActixWeb,
             Framework::Rocket,
             Framework::Warp,
@@ -479,5 +494,85 @@ mod tests {
         assert!(output.contains("8080:8080"));
         assert!(output.contains("3000:3000"));
         assert!(output.contains("restart: unless-stopped"));
+    }
+
+    #[test]
+    fn render_sveltekit_dockerfile() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &3000);
+        ctx.insert("runtime_version", &"20");
+        ctx.insert("base_image_variant", &"alpine");
+        let output = tera_render("dockerfile/node/sveltekit.tera", &ctx);
+        assert!(output.contains("node:20-alpine"));
+        assert!(output.contains("build/index.js"));
+        assert!(output.contains("USER appuser"));
+        assert!(output.contains("EXPOSE 3000"));
+    }
+
+    #[test]
+    fn render_remix_dockerfile() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &3000);
+        ctx.insert("runtime_version", &"20");
+        ctx.insert("base_image_variant", &"alpine");
+        let output = tera_render("dockerfile/node/remix.tera", &ctx);
+        assert!(output.contains("node:20-alpine"));
+        assert!(output.contains("remix-serve"));
+        assert!(output.contains("build/server/index.js"));
+        assert!(output.contains("USER appuser"));
+    }
+
+    #[test]
+    fn render_astro_dockerfile() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &4321);
+        ctx.insert("runtime_version", &"20");
+        ctx.insert("base_image_variant", &"alpine");
+        let output = tera_render("dockerfile/node/astro.tera", &ctx);
+        assert!(output.contains("node:20-alpine"));
+        assert!(output.contains("dist/server/entry.mjs"));
+        assert!(output.contains("USER appuser"));
+        assert!(output.contains("EXPOSE 4321"));
+    }
+
+    #[test]
+    fn render_gin_dockerfile() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8080);
+        ctx.insert("runtime_version", &"1.22");
+        ctx.insert("base_image_variant", &"alpine");
+        let output = tera_render("dockerfile/go/gin.tera", &ctx);
+        assert!(output.contains("golang:1.22-alpine"));
+        assert!(output.contains("CGO_ENABLED=0"));
+        assert!(output.contains("USER appuser"));
+        assert!(output.contains("EXPOSE 8080"));
+    }
+
+    #[test]
+    fn render_axum_dockerfile() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8080);
+        ctx.insert("runtime_version", &"1.78");
+        ctx.insert("base_image_variant", &"alpine");
+        ctx.insert("assembly_name", &"my-api");
+        let output = tera_render("dockerfile/rust/axum.tera", &ctx);
+        assert!(output.contains("rust:1.78-alpine"));
+        assert!(output.contains("cargo-chef"));
+        assert!(output.contains("cargo build --release --bin my-api"));
+        assert!(output.contains("target/release/my-api"));
+        assert!(output.contains("USER appuser"));
+    }
+
+    #[test]
+    fn render_rust_generic_with_assembly_name() {
+        let mut ctx = tera::Context::new();
+        ctx.insert("port", &8080);
+        ctx.insert("runtime_version", &"1.78");
+        ctx.insert("base_image_variant", &"slim");
+        ctx.insert("assembly_name", &"my-server");
+        let output = tera_render("dockerfile/rust/generic.tera", &ctx);
+        assert!(output.contains("target/release/my-server"));
+        assert!(output.contains("cargo build --release"));
+        assert!(output.contains("USER appuser"));
     }
 }

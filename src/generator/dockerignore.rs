@@ -200,13 +200,13 @@ mod tests {
         assert_eq!(files.len(), 3);
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("frontend/.dockerignore")));
+            .any(|f| f.relative_path == std::path::Path::new("frontend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from("backend/.dockerignore")));
+            .any(|f| f.relative_path == std::path::Path::new("backend/.dockerignore")));
         assert!(files
             .iter()
-            .any(|f| f.relative_path == PathBuf::from(".dockerignore")));
+            .any(|f| f.relative_path == std::path::Path::new(".dockerignore")));
     }
 
     #[test]
@@ -262,7 +262,7 @@ mod tests {
         let files = generate_dockerignores(&analysis, &config, &tera).unwrap();
         let root = files
             .iter()
-            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .find(|f| f.relative_path == std::path::Path::new(".dockerignore"))
             .expect("root .dockerignore missing");
 
         // Should contain rules from all three languages.
@@ -286,11 +286,11 @@ mod tests {
         let f2 = generate_dockerignores(&analysis, &config, &tera).unwrap();
         let root1 = f1
             .iter()
-            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .find(|f| f.relative_path == std::path::Path::new(".dockerignore"))
             .unwrap();
         let root2 = f2
             .iter()
-            .find(|f| f.relative_path == PathBuf::from(".dockerignore"))
+            .find(|f| f.relative_path == std::path::Path::new(".dockerignore"))
             .unwrap();
         assert_eq!(root1.content, root2.content);
     }
