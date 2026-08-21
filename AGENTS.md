@@ -665,6 +665,7 @@ Templates are resolved by language and framework via `resolve_dockerfile_templat
 | `package_manager` | `String` | `PackageManager.to_string()` |
 | `language` | `String` | `Language.to_string()` |
 | `framework` | `String` | `Framework.to_string()` |
+| `package_name` | `Option<String>` | `Service.package_name` (from manifest `[package] name`) |
 | `bin_name` | `String` | `package_name` → entrypoint stem → `name` |
 | `assembly_name` | `String` | Same as `bin_name` (for .NET) |
 | `py_short_version` | `String` | `"3.11"` from `"3.11.9"` (Rust-computed) |
