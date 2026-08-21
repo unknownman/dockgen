@@ -38,8 +38,13 @@ RUN cargo build --release && \
 # === Stage 3: Minimal runtime ===
 FROM {{ runner_base }} AS runner
 {{ pkg_install }}
+{% if base_image_variant == "alpine" %}
 RUN addgroup -g 1001 appgroup && \
     adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+{% else %}
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+{% endif %}
 
 WORKDIR /app
 COPY --from=builder --chown=appuser:appgroup /app/bin/app /app/server

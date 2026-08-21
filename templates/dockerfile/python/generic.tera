@@ -1,10 +1,20 @@
+{% set img_version = runtime_version | default(value="3.11") %}
+{% if base_image_variant == "alpine" %}
+{% set python_base = "python:" ~ img_version ~ "-alpine" %}
+{% else %}
+{% set python_base = "python:" ~ img_version ~ "-slim" %}
+{% endif %}
 # === Stage 1: Build dependencies ===
-FROM python:{{ runtime_version | default(value="3.11") }}-slim AS builder
+FROM {{ python_base }} AS builder
 WORKDIR /app
 
+{% if base_image_variant != "alpine" %}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev && \
     rm -rf /var/lib/apt/lists/*
+{% else %}
+RUN apk add --no-cache build-base libpq-dev
+{% endif %}
 
 COPY requirements.txt* pyproject.toml* poetry.lock* Pipfile* Pipfile.lock* ./
 
@@ -22,18 +32,24 @@ RUN pip install --no-cache-dir --upgrade pip && \
     fi
 
 # === Stage 2: Production runner ===
-FROM python:{{ runtime_version | default(value="3.11") }}-slim AS runner
+FROM {{ python_base }} AS runner
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+{% if base_image_variant != "alpine" %}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 && \
     rm -rf /var/lib/apt/lists/* && \
     groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/sh --create-home appuser
+{% else %}
+RUN apk add --no-cache libpq && \
+    addgroup -g 1001 appgroup && \
+    adduser -u 1001 -G appgroup -s /bin/sh -D appuser
+{% endif %}
 
-COPY --from=builder /usr/local/lib/python{{ runtime_version | default(value="3.11") }}/site-packages /usr/local/lib/python{{ runtime_version | default(value="3.11") }}/site-packages
+COPY --from=builder /usr/local/lib/python{{ img_version | truncate(length=0) }}{{ img_version ~ "" | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages /usr/local/lib/python{{ img_version | split(pat=".") | slice(start=0, end=2) | join(pat=".") }}/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
