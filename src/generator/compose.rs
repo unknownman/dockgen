@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use tera::Tera;
 
-use crate::models::{GeneratedFile, GenerationConfig, InfraKind, InfraService, ProjectAnalysis};
+use crate::models::{
+    Framework, GeneratedFile, GenerationConfig, InfraKind, InfraService, ProjectAnalysis,
+};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -29,6 +31,18 @@ pub fn generate_docker_compose(
     let is_single_service = !analysis.is_monorepo || analysis.services.len() == 1;
     let force_single = config.force_single && analysis.services.len() > 1;
 
+    // --- Infrastructure services ---
+    let (mut infra_entries, volume_names) = build_infra_entries(analysis, config);
+    infra_entries.sort_by(|a, b| {
+        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        na.cmp(nb)
+    });
+
+    // Resolve which infra services are included (for depends_on computation).
+    let included_infra_refs = resolve_compose_infra(analysis, config);
+
+    // --- Application service entries ---
     let mut svc_entries = Vec::new();
 
     for (idx, service) in analysis.services.iter().enumerate() {
@@ -55,8 +69,6 @@ pub fn generate_docker_compose(
             "Dockerfile".into()
         };
 
-        // Determine the port: custom port from interactive answers, then
-        // CLI override, then detected, then fallback.
         let port = custom_port_for_service(&service.name, config)
             .or_else(|| config.port_overrides.get(idx).copied())
             .or_else(|| service.exposed_ports.first().copied())
@@ -68,27 +80,57 @@ pub fn generate_docker_compose(
             .map(|(k, v)| serde_json::json!({"key": k, "value": v}))
             .collect();
 
-        svc_entries.push(serde_json::json!({
+        // Build depends_on from infrastructure connections.
+        let depends_on = build_depends_on(service, &included_infra_refs);
+
+        // Prisma migration command override.
+        let command = if let Some(ref answers) = config.interactive_answers {
+            let run_prisma = answers.run_prisma_migrations.unwrap_or(false);
+            if run_prisma
+                && service
+                    .build_command
+                    .as_deref()
+                    .is_some_and(|c| c.contains("prisma"))
+            {
+                Some(format!(
+                    "npx prisma migrate deploy && {}",
+                    service.start_command.as_deref().unwrap_or("npm start")
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut entry = serde_json::json!({
             "name": slug,
             "relative_path": relative_path,
             "dockerfile_path": dockerfile_path,
             "ports": vec![port],
             "environment": env,
-        }));
+        });
+
+        if !depends_on.is_empty() {
+            entry["depends_on"] = serde_json::json!(depends_on);
+        }
+        if let Some(cmd) = command {
+            entry["command"] = serde_json::json!(cmd);
+        }
+
+        svc_entries.push(entry);
     }
 
-    // --- Infrastructure services ---
-    let (mut infra_entries, volume_names) = build_infra_entries(analysis, config);
-    // Sort infra entries by name for deterministic output.
-    infra_entries.sort_by(|a, b| {
-        let na = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let nb = b.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        na.cmp(nb)
-    });
+    // --- Worker service entries ---
+    let worker_entries = build_worker_entries(analysis, config);
 
     // --- Build Tera context ---
     let mut ctx = tera::Context::new();
     ctx.insert("services", &svc_entries);
+
+    if !worker_entries.is_empty() {
+        ctx.insert("worker_services", &worker_entries);
+    }
 
     if !infra_entries.is_empty() {
         ctx.insert("infra_services", &infra_entries);
@@ -192,6 +234,135 @@ fn custom_port_for_service(service_name: &str, config: &GenerationConfig) -> Opt
         .as_ref()
         .and_then(|a| a.custom_service_ports.get(service_name))
         .copied()
+}
+
+/// Build `depends_on` list for an application service based on detected
+/// infrastructure that it uses.
+fn build_depends_on(service: &crate::models::Service, infra: &[&InfraService]) -> Vec<String> {
+    let mut deps = Vec::new();
+    for detected in infra {
+        if service_uses_infra(service, detected.kind) {
+            deps.push(detected.name.clone());
+        }
+    }
+    deps.sort();
+    deps.dedup();
+    deps
+}
+
+/// Returns `true` if the service appears to connect to the given infrastructure
+/// kind, based on env vars, build/start commands, and package name.
+fn service_uses_infra(service: &crate::models::Service, kind: InfraKind) -> bool {
+    // Check framework-level env vars.
+    let env_match = service.env_vars.iter().any(|(k, _)| {
+        let upper = k.to_ascii_uppercase();
+        match kind {
+            InfraKind::Postgres => upper.contains("DATABASE_URL") || upper.contains("POSTGRES"),
+            InfraKind::Mysql => upper.contains("DATABASE_URL") || upper.contains("MYSQL"),
+            InfraKind::Redis => upper.contains("REDIS"),
+            InfraKind::Mongo => upper.contains("MONGO") || upper.contains("MONGODB"),
+            InfraKind::RabbitMq => upper.contains("AMQP") || upper.contains("RABBITMQ"),
+            InfraKind::Kafka => upper.contains("KAFKA"),
+            InfraKind::Sqlite => false,
+        }
+    });
+    if env_match {
+        return true;
+    }
+
+    // Check build/start commands for infra hints.
+    let cmd_text = service
+        .build_command
+        .iter()
+        .chain(service.start_command.iter())
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Check package_name for Prisma.
+    let pkg_text = service.package_name.as_deref().unwrap_or("");
+
+    match kind {
+        InfraKind::Postgres => {
+            cmd_text.contains("prisma")
+                || pkg_text.contains("prisma")
+                || pkg_text.contains("@prisma/client")
+        }
+        InfraKind::Mysql => {
+            cmd_text.contains("prisma") && cmd_text.contains("mysql") || pkg_text.contains("prisma")
+        }
+        InfraKind::Redis => cmd_text.contains("redis") || pkg_text.contains("redis"),
+        InfraKind::Mongo => {
+            cmd_text.contains("prisma") && cmd_text.contains("mongodb")
+                || pkg_text.contains("prisma")
+        }
+        InfraKind::RabbitMq => cmd_text.contains("rabbitmq") || pkg_text.contains("rabbitmq"),
+        InfraKind::Kafka => cmd_text.contains("kafka") || pkg_text.contains("kafka"),
+        InfraKind::Sqlite => false,
+    }
+}
+
+/// Returns `true` if the given service is detected as Laravel.
+fn is_laravel_service(service: &crate::models::Service) -> bool {
+    service.language == crate::models::Language::Php && service.framework == Framework::Laravel
+}
+
+/// Build worker service entries for Laravel queue workers.
+fn build_worker_entries(
+    analysis: &ProjectAnalysis,
+    config: &GenerationConfig,
+) -> Vec<serde_json::Value> {
+    let create_worker = config
+        .interactive_answers
+        .as_ref()
+        .and_then(|a| a.create_queue_worker)
+        .unwrap_or(false);
+    if !create_worker {
+        return Vec::new();
+    }
+
+    let is_single_service = !analysis.is_monorepo || analysis.services.len() == 1;
+
+    analysis
+        .services
+        .iter()
+        .filter(|svc| is_laravel_service(svc))
+        .map(|svc| {
+            let slug = slugify(&svc.name);
+            let worker_slug = format!("{slug}-worker");
+
+            let relative_path = svc
+                .path
+                .strip_prefix(&analysis.root_path)
+                .map(|p| {
+                    let s = p.to_string_lossy().to_string();
+                    if s.is_empty() {
+                        ".".into()
+                    } else {
+                        s.replace('\\', "/")
+                    }
+                })
+                .unwrap_or_else(|_| ".".into());
+
+            let dockerfile_path = if is_single_service {
+                "Dockerfile".into()
+            } else if config.force_single {
+                format!("Dockerfile.{}", svc.name)
+            } else {
+                "Dockerfile".into()
+            };
+
+            serde_json::json!({
+                "name": worker_slug,
+                "relative_path": relative_path,
+                "dockerfile_path": dockerfile_path,
+                "ports": [],
+                "environment": [],
+                "command": "php artisan queue:work",
+                "depends_on": [slug],
+            })
+        })
+        .collect()
 }
 
 /// Whether an infrastructure kind persists data to a named volume.

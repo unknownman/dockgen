@@ -28,6 +28,16 @@ const FRONTEND_DIRS: &[&str] = &["frontend", "web", "client", "ui", "app"];
 const BACKEND_DIRS: &[&str] = &["backend", "server", "api", "gateway"];
 const CONTAINER_DIRS: &[&str] = &["services", "apps", "packages"];
 
+/// Source file extensions used to verify that a candidate directory contains
+/// actual code, not just manifests.
+const SOURCE_FILE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "java", "kt", "php", "cs", "fs", "rb",
+];
+
+/// Maximum depth (from `dir`) to scan for source files when verifying a
+/// candidate.
+const SOURCE_FILE_SCAN_DEPTH: usize = 3;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -201,7 +211,7 @@ fn discover_monorepo_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> 
                 }
 
                 let manifests = find_manifests(&path);
-                if !manifests.is_empty() {
+                if !manifests.is_empty() && has_verifiable_source_files(&path) {
                     let relative = relative_path(root, &path);
                     candidates.push(DiscoveredServiceCandidate {
                         name: dir_name.clone(),
@@ -232,7 +242,7 @@ fn discover_monorepo_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> 
             }
 
             let manifests = find_manifests(&path);
-            if !manifests.is_empty() {
+            if !manifests.is_empty() && has_verifiable_source_files(&path) {
                 let st = classify_service_type(&dir_name);
                 let relative = relative_path(root, &path);
                 candidates.push(DiscoveredServiceCandidate {
@@ -290,7 +300,7 @@ fn discover_flat_candidates(root: &Path) -> Vec<DiscoveredServiceCandidate> {
                 continue;
             }
             let manifests = find_manifests(&path);
-            if !manifests.is_empty() {
+            if !manifests.is_empty() && has_verifiable_source_files(&path) {
                 let st = classify_service_type(&dir_name);
                 let relative = relative_path(root, &path);
                 candidates.push(DiscoveredServiceCandidate {
@@ -332,7 +342,7 @@ fn discover_well_known_sub_services(root: &Path) -> Vec<DiscoveredServiceCandida
                 continue;
             }
             let manifests = find_manifests(&path);
-            if !manifests.is_empty() {
+            if !manifests.is_empty() && has_verifiable_source_files(&path) {
                 let st = classify_service_type(&dir_name);
                 let relative = relative_path(root, &path);
                 candidates.push(DiscoveredServiceCandidate {
@@ -356,6 +366,43 @@ fn discover_well_known_sub_services(root: &Path) -> Vec<DiscoveredServiceCandida
 /// Returns `true` if `dir_name` is in the exclusion list.
 pub fn is_excluded(dir_name: &str) -> bool {
     EXCLUDED_DIRS.contains(&dir_name)
+}
+
+/// Returns `true` if `dir` (non-recursively, up to `SOURCE_FILE_SCAN_DEPTH`
+/// levels deep) contains at least one file whose extension is in
+/// `SOURCE_FILE_EXTENSIONS`.
+///
+/// This prevents manifest-only directories (e.g. a `packages/shared`
+/// containing only a `package.json` with no source files) from being
+/// treated as distinct deployable services.
+pub fn has_verifiable_source_files(dir: &Path) -> bool {
+    has_source_files_recursive(dir, 0)
+}
+
+/// Recursive helper for `has_verifiable_source_files`.
+fn has_source_files_recursive(dir: &Path, depth: usize) -> bool {
+    if depth > SOURCE_FILE_SCAN_DEPTH {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if SOURCE_FILE_EXTENSIONS.contains(&ext) {
+                    return true;
+                }
+            }
+        } else if path.is_dir() {
+            let dir_name = file_name(&path);
+            if !is_excluded(&dir_name) && has_source_files_recursive(&path, depth + 1) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Scans `dir` (non-recursively) for known manifest file names and returns
@@ -622,10 +669,12 @@ mod tests {
         // frontend
         let fe = create_dir(root, "frontend");
         create_file(&fe, "package.json");
+        create_file(&fe, "index.ts"); // source file
 
         // backend
         let be = create_dir(root, "backend");
         create_file(&be, "package.json");
+        create_file(&be, "server.js"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -662,16 +711,19 @@ mod tests {
         let apps_web = create_dir(root, "apps");
         let apps_web = create_dir(&apps_web, "web");
         create_file(&apps_web, "package.json");
+        create_file(&apps_web, "index.ts"); // source file
 
         // services/api
         let svc_api = create_dir(root, "services");
         let svc_api = create_dir(&svc_api, "api");
         create_file(&svc_api, "go.mod");
+        create_file(&svc_api, "main.go"); // source file
 
         // packages/shared
         let pkg = create_dir(root, "packages");
         let pkg = create_dir(&pkg, "shared");
         create_file(&pkg, "package.json");
+        create_file(&pkg, "index.ts"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -702,6 +754,7 @@ mod tests {
         // A real service.
         let svc = create_dir(root, "api");
         create_file(&svc, "package.json");
+        create_file(&svc, "main.ts"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -721,6 +774,7 @@ mod tests {
 
         let svc = create_dir(root, "web");
         create_file(&svc, "package.json");
+        create_file(&svc, "index.ts"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -743,6 +797,7 @@ mod tests {
 
         let svc = create_dir(root, "app");
         create_file(&svc, "package.json");
+        create_file(&svc, "index.ts"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -777,9 +832,11 @@ mod tests {
         // No monorepo tool, root has no manifest.
         let fe = create_dir(root, "frontend");
         create_file(&fe, "package.json");
+        create_file(&fe, "App.tsx"); // source file
 
         let be = create_dir(root, "backend");
         create_file(&be, "go.mod");
+        create_file(&be, "main.go"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -814,9 +871,11 @@ mod tests {
         // Well-known sub-services with their own manifests.
         let fe = create_dir(root, "frontend");
         create_file(&fe, "package.json");
+        create_file(&fe, "App.tsx"); // source file
 
         let be = create_dir(root, "backend");
         create_file(&be, "composer.json");
+        create_file(&be, "app.php"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -876,10 +935,13 @@ mod tests {
         let c = create_dir(root, "services");
         let api = create_dir(&c, "api");
         create_file(&api, "package.json");
+        create_file(&api, "main.ts"); // source file
         let web = create_dir(&c, "web");
         create_file(&web, "package.json");
+        create_file(&web, "app.tsx"); // source file
         let auth = create_dir(&c, "auth");
         create_file(&auth, "go.mod");
+        create_file(&auth, "main.go"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -905,6 +967,7 @@ mod tests {
         let svc = create_dir(root, "api");
         create_file(&svc, "Cargo.toml");
         create_file(&svc, "docker-compose.yml");
+        create_file(&svc, "main.rs"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -926,6 +989,7 @@ mod tests {
         let apps = create_dir(root, "apps");
         let web = create_dir(&apps, "web");
         create_file(&web, "package.json");
+        create_file(&web, "index.ts"); // source file
 
         let result = analyze_structure(root).unwrap();
 
@@ -934,5 +998,87 @@ mod tests {
             result.candidates[0].relative_path,
             PathBuf::from("apps/web")
         );
+    }
+
+    // -- source file verification -------------------------------------------
+
+    #[test]
+    fn monorepo_candidate_without_source_files_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        create_file(root, "turbo.json");
+
+        // apps/web has a package.json but no source files.
+        let apps_web = create_dir(root, "apps");
+        let apps_web = create_dir(&apps_web, "web");
+        create_file(&apps_web, "package.json");
+
+        // services/api has a go.mod AND source files — should be discovered.
+        let svc_api = create_dir(root, "services");
+        let svc_api = create_dir(&svc_api, "api");
+        create_file(&svc_api, "go.mod");
+        create_file(&svc_api, "main.go");
+
+        let result = analyze_structure(root).unwrap();
+
+        // Only the api service should be discovered (web has no source files).
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].name, "api");
+    }
+
+    #[test]
+    fn flat_subdir_without_source_files_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // No monorepo tool, no root manifest — triggers flat candidate scan.
+        let fe = create_dir(root, "frontend");
+        create_file(&fe, "package.json");
+        // No source files in frontend/ — should NOT be discovered.
+
+        let be = create_dir(root, "backend");
+        create_file(&be, "go.mod");
+        create_file(&be, "main.go"); // Has source files — should be discovered.
+
+        let result = analyze_structure(root).unwrap();
+
+        assert!(!result.is_monorepo);
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].name, "backend");
+    }
+
+    #[test]
+    fn has_verifiable_source_files_scans_depth_3() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Create nested structure: src/components/Button.tsx
+        let src = create_dir(root, "src");
+        let components = create_dir(&src, "components");
+        create_file(&components, "Button.tsx");
+
+        assert!(has_verifiable_source_files(root));
+    }
+
+    #[test]
+    fn has_verifiable_source_files_ignores_excluded_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Source file inside node_modules should NOT count.
+        let nm = create_dir(root, "node_modules");
+        create_file(&nm, "index.js");
+
+        assert!(!has_verifiable_source_files(root));
+    }
+
+    #[test]
+    fn has_verifiable_source_files_returns_false_for_empty_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        create_dir(root, "empty");
+
+        assert!(!has_verifiable_source_files(&root.join("empty")));
     }
 }

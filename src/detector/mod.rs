@@ -244,11 +244,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("package-lock.json"), "{}").unwrap();
+        std::fs::write(root.join("index.js"), "console.log('hello');\n").unwrap();
     }
 
     /// Creates a minimal Go project.
     fn create_go_project(root: &Path, go_mod: &str) {
         std::fs::write(root.join("go.mod"), go_mod).unwrap();
+        std::fs::write(root.join("main.go"), "package main\n\nfunc main() {}\n").unwrap();
     }
 
     /// Creates a minimal Rust project.
@@ -256,6 +258,11 @@ mod tests {
         std::fs::write(
             root.join("Cargo.toml"),
             "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("main.rs"),
+            "fn main() {\n    println!(\"hello\");\n}\n",
         )
         .unwrap();
     }
@@ -521,6 +528,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(web.join("next.config.js"), "").unwrap();
+        std::fs::write(web.join("index.tsx"), "export default function Home() {}\n").unwrap();
 
         let analysis = analyze_full_project(root, None, None, &[]).unwrap();
 
@@ -784,6 +792,7 @@ datasource db {
         )
         .unwrap();
         std::fs::write(fe.join("package-lock.json"), "{}").unwrap();
+        std::fs::write(fe.join("index.ts"), "console.log('redis app');\n").unwrap();
 
         // Backend with postgres env.
         let be = root.join("backend");

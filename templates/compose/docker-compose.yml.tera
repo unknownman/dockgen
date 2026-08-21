@@ -8,14 +8,43 @@ services:
 {% for port in service.ports %}
       - "{{ port }}:{{ port }}"
 {% endfor %}
-{% if service.environment | length > 0 %}
+{% if service.environment is defined and service.environment | length > 0 %}
     environment:
 {% for env in service.environment %}
       - {{ env.key }}={{ env.value }}
 {% endfor %}
 {% endif %}
+{% if service.depends_on is defined and service.depends_on | length > 0 %}
+    depends_on:
+{% for dep in service.depends_on %}
+      - {{ dep }}
+{% endfor %}
+{% endif %}
+{% if service.command is defined %}
+    command: {{ service.command }}
+{% endif %}
     restart: unless-stopped
 {% endfor %}
+{% if worker_services is defined and worker_services | length > 0 %}
+
+  # --- Worker Services ---
+{% for worker in worker_services %}
+  {{ worker.name }}:
+    build:
+      context: {{ worker.relative_path | default(value=".") }}
+      dockerfile: {{ worker.dockerfile_path | default(value="Dockerfile") }}
+{% if worker.command is defined %}
+    command: {{ worker.command }}
+{% endif %}
+{% if worker.depends_on is defined and worker.depends_on | length > 0 %}
+    depends_on:
+{% for dep in worker.depends_on %}
+      - {{ dep }}
+{% endfor %}
+{% endif %}
+    restart: unless-stopped
+{% endfor %}
+{% endif %}
 {% if infra_services is defined and infra_services | length > 0 %}
 
   # --- Infrastructure Services ---

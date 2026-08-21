@@ -1006,3 +1006,201 @@ fn test_manifest_pg_dependency_triggers_compose() {
         "compose should include postgres service"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Laravel queue worker synthesis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_laravel_worker_generation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Minimal Laravel project.
+    std::fs::write(
+        root.join("composer.json"),
+        r#"{"name":"laravel-app","require":{"laravel/framework":"^10.0"}}"#,
+    )
+    .unwrap();
+    // A source file to pass the source-file verification gate.
+    std::fs::write(
+        root.join("app.php"),
+        "<?php\nreturn [\n    'providers' => []\n];\n",
+    )
+    .unwrap();
+
+    let output = dockgen_cmd()
+        .arg(root)
+        .arg("--json")
+        .arg("--compose")
+        .arg("-y")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let services = json["analysis"]["services"]
+        .as_array()
+        .expect("missing services array");
+    assert!(!services.is_empty());
+    assert_eq!(services[0]["framework"], "Laravel");
+
+    let files = json["files"].as_array().expect("missing files array");
+    let compose = files.iter().find(|f| {
+        f["relative_path"]
+            .as_str()
+            .is_some_and(|p| p == "docker-compose.yml")
+    });
+    let compose_content = compose.expect("docker-compose.yml not found")["content"]
+        .as_str()
+        .expect("missing content");
+
+    // Worker service should be present.
+    assert!(
+        compose_content.contains("-worker:"),
+        "expected worker service in compose, got:\n{compose_content}"
+    );
+    assert!(
+        compose_content.contains("php artisan queue:work"),
+        "expected queue:work command in worker service, got:\n{compose_content}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Prisma depends_on integration
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_prisma_depends_on_generation() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Node.js project with Prisma and DATABASE_URL pointing to Postgres.
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"prisma-dep","scripts":{"start":"node index.js","build":"prisma generate"},"dependencies":{"prisma":"^5.0.0","@prisma/client":"^5.0.0"}}"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("index.js"), "console.log('prisma app');\n").unwrap();
+
+    // .env with DATABASE_URL pointing to Postgres.
+    std::fs::write(
+        root.join(".env"),
+        "DATABASE_URL=postgres://user:pass@localhost:5432/mydb\n",
+    )
+    .unwrap();
+
+    // Create prisma schema.
+    std::fs::create_dir_all(root.join("prisma")).unwrap();
+    std::fs::write(
+        root.join("prisma/schema.prisma"),
+        r#"datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+"#,
+    )
+    .unwrap();
+
+    let output = dockgen_cmd()
+        .arg(root)
+        .arg("--json")
+        .arg("--compose")
+        .arg("-y")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    let files = json["files"].as_array().expect("missing files array");
+    let compose = files.iter().find(|f| {
+        f["relative_path"]
+            .as_str()
+            .is_some_and(|p| p == "docker-compose.yml")
+    });
+    let compose_content = compose.expect("docker-compose.yml not found")["content"]
+        .as_str()
+        .expect("missing content");
+
+    // Application service should have depends_on: [postgres].
+    assert!(
+        compose_content.contains("depends_on:"),
+        "expected depends_on in compose, got:\n{compose_content}"
+    );
+    assert!(
+        compose_content.contains("- postgres"),
+        "expected postgres in depends_on list, got:\n{compose_content}"
+    );
+
+    // Postgres service should be present.
+    assert!(
+        compose_content.contains("postgres:"),
+        "expected postgres service in compose"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Empty source directory rejection in monorepo
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_empty_source_dir_not_discovered() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    // Turborepo workspace.
+    std::fs::write(
+        root.join("turbo.json"),
+        r#"{"$schema":"https://turbo.build/schema.json","tasks":{}}"#,
+    )
+    .unwrap();
+
+    // services/real — has manifest AND source files.
+    std::fs::create_dir_all(root.join("services/real")).unwrap();
+    std::fs::write(
+        root.join("services/real/package.json"),
+        r#"{"name":"real","scripts":{"start":"node index.js"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("services/real/index.js"),
+        "console.log('real service');\n",
+    )
+    .unwrap();
+
+    // services/empty — has manifest but NO source files (should be rejected).
+    std::fs::create_dir_all(root.join("services/empty")).unwrap();
+    std::fs::write(
+        root.join("services/empty/package.json"),
+        r#"{"name":"empty","scripts":{}}"#,
+    )
+    .unwrap();
+
+    let output = dockgen_cmd()
+        .arg(root)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let services = json["analysis"]["services"]
+        .as_array()
+        .expect("missing services array");
+
+    // Only 'real' should be discovered.
+    assert_eq!(
+        services.len(),
+        1,
+        "expected 1 service, got {}",
+        services.len()
+    );
+    assert_eq!(services[0]["name"], "real");
+}
