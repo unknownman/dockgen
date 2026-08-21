@@ -1,12 +1,14 @@
 pub mod framework;
+pub mod infra;
 pub mod language;
 pub mod structure;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::analyzer::{analyze_manifests, extract_version};
+use crate::analyzer::{analyze_env_files, analyze_manifests, extract_version};
 use crate::models::{Framework, Language, ProjectAnalysis, Service, ServiceType};
 
 use self::framework::detect_framework;
@@ -48,6 +50,10 @@ pub fn analyze_full_project(
     // --- Step 2: Per-candidate analysis ---
     let mut warnings = Vec::new();
     let mut services = Vec::new();
+    let mut all_manifests = Vec::new();
+
+    // Collect env files from root (highest-level context).
+    let mut merged_env: BTreeMap<String, String> = analyze_env_files(&root_path);
 
     for candidate in &structure.candidates {
         // Apply service filter.
@@ -71,6 +77,14 @@ pub fn analyze_full_project(
         let manifest = analyze_manifests(&candidate.full_path);
         let fw_result = detect_framework(&candidate.full_path, &manifest, &language);
         let framework = fw_override.cloned().unwrap_or(fw_result.framework);
+
+        // Merge candidate env files (candidate-level overrides root-level).
+        let candidate_env = analyze_env_files(&candidate.full_path);
+        for (k, v) in candidate_env {
+            merged_env.insert(k, v);
+        }
+
+        all_manifests.push(manifest.clone());
 
         // --- Ports ---
         let exposed_ports: Vec<u16> = vec![fw_result.default_port];
@@ -114,7 +128,11 @@ pub fn analyze_full_project(
         services.push(svc);
     }
 
-    // --- Step 3: Deterministic sort ---
+    // --- Step 3: Infrastructure detection ---
+    let detected_infrastructures =
+        infra::detect_infrastructures(&root_path, &all_manifests, &merged_env);
+
+    // --- Step 4: Deterministic sort ---
     services.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(ProjectAnalysis {
@@ -122,7 +140,7 @@ pub fn analyze_full_project(
         is_monorepo: structure.is_monorepo,
         workspace_tool: structure.workspace_tool,
         services,
-        detected_infrastructures: vec![],
+        detected_infrastructures,
         warnings,
     })
 }
@@ -647,5 +665,163 @@ mod tests {
             ),
             ServiceType::MonorepoMember,
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Infrastructure detection integration
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn env_postgres_detected_in_project() {
+        let tmp = TempDir::new().unwrap();
+        create_node_project(tmp.path());
+        std::fs::write(
+            tmp.path().join(".env"),
+            "DATABASE_URL=postgres://localhost:5432/mydb\n",
+        )
+        .unwrap();
+
+        let analysis = analyze_full_project(tmp.path(), None, None, &[]).unwrap();
+
+        assert_eq!(analysis.detected_infrastructures.len(), 1);
+        let infra = &analysis.detected_infrastructures[0];
+        assert_eq!(infra.kind, crate::models::InfraKind::Postgres);
+        assert_eq!(infra.name, "postgres");
+        assert_eq!(infra.port, 5432);
+    }
+
+    #[test]
+    fn env_redis_detected_in_project() {
+        let tmp = TempDir::new().unwrap();
+        create_node_project(tmp.path());
+        std::fs::write(
+            tmp.path().join(".env.local"),
+            "REDIS_URL=redis://localhost:6379\n",
+        )
+        .unwrap();
+
+        let analysis = analyze_full_project(tmp.path(), None, None, &[]).unwrap();
+
+        let redis = analysis
+            .detected_infrastructures
+            .iter()
+            .find(|i| i.kind == crate::models::InfraKind::Redis);
+        assert!(redis.is_some());
+        assert_eq!(redis.unwrap().port, 6379);
+    }
+
+    #[test]
+    fn manifest_redis_dep_detected_in_project() {
+        let tmp = TempDir::new().unwrap();
+        create_node_project(tmp.path());
+        // Overwrite package.json with redis dependency.
+        std::fs::write(
+            tmp.path().join("package.json"),
+            r#"{"name":"test","scripts":{"start":"node index.js"},"dependencies":{"ioredis":"^5.0.0"}}"#,
+        )
+        .unwrap();
+
+        let analysis = analyze_full_project(tmp.path(), None, None, &[]).unwrap();
+
+        let redis = analysis
+            .detected_infrastructures
+            .iter()
+            .find(|i| i.kind == crate::models::InfraKind::Redis);
+        assert!(redis.is_some());
+    }
+
+    #[test]
+    fn prisma_schema_detected_in_project() {
+        let tmp = TempDir::new().unwrap();
+        create_node_project(tmp.path());
+
+        let prisma_dir = tmp.path().join("prisma");
+        std::fs::create_dir(&prisma_dir).unwrap();
+        std::fs::write(
+            prisma_dir.join("schema.prisma"),
+            r#"
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+"#,
+        )
+        .unwrap();
+
+        let analysis = analyze_full_project(tmp.path(), None, None, &[]).unwrap();
+
+        let pg = analysis
+            .detected_infrastructures
+            .iter()
+            .find(|i| i.kind == crate::models::InfraKind::Postgres);
+        assert!(pg.is_some());
+    }
+
+    #[test]
+    fn monorepo_infra_detected_from_multiple_candidates() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        std::fs::write(root.join("turbo.json"), "{}").unwrap();
+
+        // Frontend with redis.
+        let fe = root.join("frontend");
+        std::fs::create_dir(&fe).unwrap();
+        std::fs::write(
+            fe.join("package.json"),
+            r#"{"name":"web","dependencies":{"ioredis":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        std::fs::write(fe.join("package-lock.json"), "{}").unwrap();
+
+        // Backend with postgres env.
+        let be = root.join("backend");
+        std::fs::create_dir(&be).unwrap();
+        create_go_project(&be, "module backend\n\ngo 1.22\n");
+        std::fs::write(be.join(".env"), "DATABASE_URL=postgres://localhost/app\n").unwrap();
+
+        let analysis = analyze_full_project(root, None, None, &[]).unwrap();
+
+        let kinds: Vec<crate::models::InfraKind> = analysis
+            .detected_infrastructures
+            .iter()
+            .map(|i| i.kind)
+            .collect();
+        assert!(kinds.contains(&crate::models::InfraKind::Postgres));
+        assert!(kinds.contains(&crate::models::InfraKind::Redis));
+    }
+
+    #[test]
+    fn no_infra_empty_project() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        std::fs::write(root.join("turbo.json"), "{}").unwrap();
+
+        let analysis = analyze_full_project(root, None, None, &[]).unwrap();
+
+        assert!(analysis.detected_infrastructures.is_empty());
+    }
+
+    #[test]
+    fn infra_sorted_by_kind() {
+        let tmp = TempDir::new().unwrap();
+        create_node_project(tmp.path());
+        std::fs::write(
+            tmp.path().join(".env"),
+            "DATABASE_URL=postgres://localhost/app\nREDIS_URL=redis://localhost\n",
+        )
+        .unwrap();
+
+        let analysis = analyze_full_project(tmp.path(), None, None, &[]).unwrap();
+
+        let kinds: Vec<crate::models::InfraKind> = analysis
+            .detected_infrastructures
+            .iter()
+            .map(|i| i.kind)
+            .collect();
+        let mut sorted = kinds.clone();
+        sorted.sort();
+        assert_eq!(kinds, sorted);
     }
 }
